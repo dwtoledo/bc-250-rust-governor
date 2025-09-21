@@ -157,7 +157,7 @@ Here are a few example profiles for different user preferences. The "Balanced" p
 
 ---
 
-### Profile 1: Balanced & Stable (Recommended)
+### Profile 1: Balanced & Stable (Recommended - I TESTED)
 
 This profile is the result of fine-tuning for a responsive yet highly stable experience. It prioritizes eliminating clock fluctuations during gameplay while still providing a fast ramp-up when needed.
 
@@ -180,7 +180,7 @@ lower = 0.65
 
 ---
 
-### Profile 2: Aggressive Performance
+### Profile 2: Aggressive Performance (I DID NOT TEST, this is an AI suggestion)
 
 This profile prioritizes the fastest possible response time, making the clock jump to the maximum almost instantly. It may be less smooth than the balanced profile.
 
@@ -203,7 +203,7 @@ lower = 0.75
 
 ---
 
-### Profile 3: Smooth & Responsive
+### Profile 3: Smooth & Responsive (I DID NOT TEST, this is an AI suggestion)
 
 This profile is a good middle-ground, offering a faster-than-default response without being as aggressive as the profile above. It uses a slightly longer confirmation time to smooth out minor load variations.
 
