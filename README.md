@@ -219,7 +219,10 @@ upper = 0.95
 lower = 0.80
 ```
 
-**
+**Behavior:**
+- **Confirmation Time**: `20 * 4ms = 80ms`
+- **Normal Ramp (Up/Down)**: `500 MHz/s`
+- **Burst Ramp**: `10,000 MHz/s` (Takes ~0.12 seconds to climb 1230 MHz).
 
 # Thanks
 Thanks for:
@@ -227,6 +230,3 @@ https://github.com/Fred78290/nct6687d (sensor's driver)
 https://github.com/Magnap/cyan-skillfish-governor (the first Rust project)
 
 And all BC-250 community from Discord!!
-- **Confirmation Time**: `20 * 4ms = 80ms`
-- **Normal Ramp (Up/Down)**: `500 MHz/s`
-- **Burst Ramp**: `10,000 MHz/s` (Takes ~0.12 seconds to climb 1230 MHz).
