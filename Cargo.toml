@@ -1,0 +1,15 @@
+[package]
+name = "bc-250-rust-governor"
+version = "0.0.1"
+license = "MIT"
+edition = "2024"
+
+[dependencies]
+libdrm_amdgpu_sys = "0.8.8"
+toml = "0.9.5"
+watch = "0.2.3"
+glob = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+
+[dev-dependencies]
+tempfile = "3.6"

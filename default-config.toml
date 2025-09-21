@@ -1,0 +1,42 @@
+safe-points = [
+    { frequency = 350, voltage = 570 },
+    { frequency = 860, voltage = 600 },
+    { frequency = 1090, voltage = 650 },
+    { frequency = 1280, voltage = 700 },
+    { frequency = 1460, voltage = 750 },
+    { frequency = 1620, voltage = 800 },
+    { frequency = 1760, voltage = 850 },
+    { frequency = 1890, voltage = 900 },
+    { frequency = 2030, voltage = 950 },
+    { frequency = 2090, voltage = 975 },
+    { frequency = 2140, voltage = 1000 },
+    { frequency = 2230, voltage = 1050 },
+]
+
+[timing]
+burst-samples = 12
+intervals = { sample = 3000, adjust = 1000000, finetune = 5000000 }
+ramp-rates = { normal = 0.246, burst = 1.23 }
+
+[frequency-thresholds]
+adjust = 50
+finetune = 10
+
+[load-target]
+upper = 0.95
+lower = 0.65
+
+[thermal]
+monitor_interval = 1000
+max_safe_temp = 85.0
+emergency_temp = 95.0
+fan_control_index = 1
+
+[thermal.fan-control]
+enabled = true
+curve = [
+    [40.0, 25],
+    [55.0, 50],
+    [70.0, 75],
+    [85.0, 100],
+]
