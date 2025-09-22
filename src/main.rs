@@ -295,7 +295,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let (pwm_opt, fan_idx_opt) = tm.get_primary_fan_info(thermal_config.fan_control_index);
                     let pwm_raw = pwm_opt;
                     let pwm_str = pwm_raw.map(|p| p.to_string()).unwrap_or_else(|| "N/A".to_string());
-                    let pwm_pct = pwm_raw.map(|raw| (((raw as f32) * 100.0 / 255.0).round() as u8));
+                    let pwm_pct = pwm_raw.map(|raw| ((raw as f32) * 100.0 / 255.0).round() as u8);
                     let pwm_pct_str = pwm_pct.map(|p| format!("{}%", p)).unwrap_or_else(|| "N/A".to_string());
                     println!("🌡️  Temps: AMD:{:.1}°C CPU:{:.1}°C Max:{:.1}°C - PWM:{} ({})",
                         thermal_status.amdgpu_temperature, thermal_status.cpu_temperature, thermal_status.max_temperature,
@@ -312,7 +312,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     if thermal_config.fan_control.enabled && !thermal_config.fan_control.curve.is_empty() {
                         let target_speed = calculate_fan_speed(thermal_status.max_temperature, &thermal_config.fan_control.curve);
-                        let current_percent = pwm_opt.map(|raw| (((raw as f32) * 100.0 / 255.0).round() as u8));
+                        let current_percent = pwm_opt.map(|raw| ((raw as f32) * 100.0 / 255.0).round() as u8);
                         let set_idx = fan_idx_opt.unwrap_or(thermal_config.fan_control_index);
                         if current_percent != Some(target_speed) {
                             if let Err(e) = tm.set_fan_speed(set_idx, target_speed) {
