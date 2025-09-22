@@ -1,6 +1,6 @@
-# Cyan Skillfish Governor - A Configuration Guide for the BC-250
+# BC-250 Rust Governor - A Configuration Guide for the BC-250
 
-This document provides a comprehensive guide to configuring the `cyan-skillfish-governor`, specifically for use with the **AMD BC-250 APU**. This hardware, originally designed for cryptocurrency mining, can be repurposed for gaming, but it requires careful power and thermal management to function correctly. This governor provides the necessary intelligent control to unlock its gaming potential.
+This document provides a comprehensive guide to configuring the `bc-250-rust-governor`, specifically for use with the **AMD BC-250 APU**. This hardware, originally designed for cryptocurrency mining, can be repurposed for gaming, but it requires careful power and thermal management to function correctly. This governor provides the necessary intelligent control to unlock its gaming potential.
 
 ## Core Concepts
 
@@ -22,7 +22,7 @@ This method provides a very direct and low-level view of how demanded the GPU is
 
 ## Configuration (`default-config.toml`)
 
-All tuning is done in the `default-config.toml` file, which will be copied to `/etc/cyan-skillfish-governor/config.toml` during setup.
+All tuning is done in the `default-config.toml` file, which will be copied to `/etc/bc-250-rust-governor/config.toml` during setup.
 
 ### `safe-points`
 
@@ -101,25 +101,25 @@ Follow these steps to build the governor and run it as a systemd service on your
     ```sh
     cargo build --release
     ```
-3.  The compiled binary will be available at `target/release/cyan-skillfish-governor`.
+3.  The compiled binary will be available at `target/release/bc-250-rust-governor`.
 
 ### Systemd Service Setup
 
-The included `cyan-skillfish-governor.service` file is configured to run the governor as a system-wide service.
+The included `bc-250-rust-governor.service` file is configured to run the governor as a system-wide service.
 
 **1. Copy the Binary:**
 Copy the compiled binary to a location in your system's PATH. The service file expects it to be in `/usr/local/bin/`.
 ```sh
-sudo cp target/release/cyan-skillfish-governor /usr/local/bin/
+sudo cp target/release/bc-250-rust-governor /usr/local/bin/
 ```
 
 **2. Copy the Configuration File:**
 The service expects a global configuration file. You must create the directory and copy your tuned config file there.
 ```sh
-sudo mkdir -p /etc/cyan-skillfish-governor/
-sudo cp default-config.toml /etc/cyan-skillfish-governor/config.toml
+sudo mkdir -p /etc/bc-250-rust-governor/
+sudo cp default-config.toml /etc/bc-250-rust-governor/config.toml
 ```
-**Note:** From now on, all changes to the configuration must be made to `/etc/cyan-skillfish-governor/config.toml`.
+**Note:** From now on, all changes to the configuration must be made to `/etc/bc-250-rust-governor/config.toml`.
 
 **3. Install the Fan Controller Driver (Mandatory):**
 The BC-250 uses a **Nuvoton NCT6687** chip for temperature monitoring and fan control. The driver for this chip is **required** for the governor's thermal management to function. The service file will automatically load this driver (`modprobe nct6687`), but it must be installed first.
@@ -134,21 +134,21 @@ The BC-250 uses a **Nuvoton NCT6687** chip for temperature monitoring and fan co
 **4. Copy the Service File:**
 Copy the service unit file to the systemd directory.
 ```sh
-sudo cp cyan-skillfish-governor.service /etc/systemd/system/
+sudo cp bc-250-rust-governor.service /etc/systemd/system/
 ```
 
 **5. Enable and Start the Service:**
 Reload the systemd daemon to recognize the new service, then enable it to start on boot and start it immediately.
 ```sh
 sudo systemctl daemon-reload
-sudo systemctl enable cyan-skillfish-governor.service
-sudo systemctl start cyan-skillfish-governor.service
+sudo systemctl enable bc-250-rust-governor.service
+sudo systemctl start bc-250-rust-governor.service
 ```
 
 **6. Check the Status:**
 You can check if the service is running correctly using the status command.
 ```sh
-sudo systemctl status cyan-skillfish-governor.service
+sudo systemctl status bc-250-rust-governor.service
 ```
 
 ## Tuning Profiles for the BC-250
