@@ -1,0 +1,12 @@
+[Unit]
+Description=BC250 Rust Governor
+
+[Service]
+ExecStartPre=/usr/sbin/modprobe nct6687
+ExecStart=/usr/local/bin/bc-250-rust-governor /etc/bc-250-rust-governor/config.toml
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+
