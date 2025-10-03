@@ -1,10 +1,10 @@
-
 use serde::Deserialize;
 use std::{
     collections::BTreeMap,
     fs::File,
     io::{Error as IoError, ErrorKind, Write},
     os::fd::AsRawFd,
+    sync::mpsc,
     thread::JoinHandle,
     time::{Duration, Instant},
 };
@@ -13,6 +13,9 @@ use libdrm_amdgpu_sys::{AMDGPU::DeviceHandle, PCI::BUS_INFO};
 
 mod thermal;
 use thermal::ThermalManager;
+
+mod governor;
+use governor::{GovCommand, GovernorState, GovernorStats, SetterAck};
 
 #[derive(Deserialize, Debug)]
 #[serde(deny_unknown_fields, default)]
@@ -33,6 +36,10 @@ struct Timing {
     intervals: Intervals,
     #[serde(rename = "burst-samples")]
     burst_samples: u8,
+    #[serde(rename = "ramp-up-samples")]
+    ramp_up_samples: u16,
+    #[serde(rename = "ramp-down-samples")]
+    ramp_down_samples: u16,
     #[serde(rename = "ramp-rates")]
     ramp_rates: RampRates,
 }
@@ -48,8 +55,15 @@ struct Intervals {
 #[derive(Deserialize, Debug)]
 #[serde(deny_unknown_fields, default)]
 struct RampRates {
-    normal: f32,
+    up: f32,
+    down: f32,
     burst: f32,
+    #[serde(rename = "up-medium")]
+    up_medium: f32,
+    #[serde(rename = "up-slow")]
+    up_slow: f32,
+    #[serde(rename = "up-crawl")]
+    up_crawl: f32,
 }
 
 #[derive(Deserialize, Debug)]
@@ -62,7 +76,10 @@ struct FrequencyThresholds {
 #[derive(Deserialize, Debug)]
 #[serde(deny_unknown_fields, default)]
 struct LoadTarget {
-    upper: f32,
+    upper: f32,         
+    medium: f32,
+    slow: f32,
+    crawl: f32,
     lower: f32,
 }
 
@@ -121,7 +138,9 @@ impl Default for Timing {
     fn default() -> Self {
         Self {
             intervals: Default::default(),
-            burst_samples: 48,
+            burst_samples: 6,
+            ramp_up_samples: 64,
+            ramp_down_samples: 256,
             ramp_rates: Default::default(),
         }
     }
@@ -131,8 +150,8 @@ impl Default for Intervals {
     fn default() -> Self {
         Self {
             sample: 2000,
-            adjust: 20_000,
-            finetune: 1_000_000_000,
+            adjust: 8_000,
+            finetune: 50_000,
         }
     }
 }
@@ -140,8 +159,12 @@ impl Default for Intervals {
 impl Default for RampRates {
     fn default() -> Self {
         Self {
-            normal: 1.0,
-            burst: 200.0,
+            up: 50.0,
+            down: 0.24,
+            burst: 800.0,
+            up_medium: 25.0,
+            up_slow: 10.0,
+            up_crawl: 2.0,
         }
     }
 }
@@ -158,8 +181,11 @@ impl Default for FrequencyThresholds {
 impl Default for LoadTarget {
     fn default() -> Self {
         Self {
-            upper: 0.95,
-            lower: 0.7,
+            upper: 0.90,
+            medium: 0.75,
+            slow: 0.60,
+            crawl: 0.50,
+            lower: 0.50,
         }
     }
 }
@@ -189,14 +215,8 @@ fn calculate_fan_speed(temp: f32, curve: &[(f32, u8)]) -> u8 {
         if temp >= p1.0 && temp <= p2.0 {
             let (temp1, speed1) = (p1.0, p1.1 as f32);
             let (temp2, speed2) = (p2.0, p2.1 as f32);
-
-            if (temp2 - temp1).abs() < f32::EPSILON {
-                return speed1 as u8;
-            }
-
-            let factor = (temp - temp1) / (temp2 - temp1);
-            let target_speed = speed1 + factor * (speed2 - speed1);
-            return target_speed.round().clamp(0.0, 100.0) as u8;
+            let ratio = (temp - temp1) / (temp2 - temp1);
+            return (speed1 + ratio * (speed2 - speed1)) as u8;
         }
     }
 
@@ -277,11 +297,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let min_freq = safe_points.first_key_value().map(|(&k, _)| k).unwrap_or(min_engine_clock as u16);
     let max_freq = safe_points.last_key_value().map(|(&k, _)| k).unwrap_or(max_engine_clock as u16);
 
-    let mut pp_file = std::fs::OpenOptions::new().write(true).open(
+    let pp_file = std::fs::OpenOptions::new().write(true).open(
         dev_handle.get_sysfs_path().map_err(IoError::from_raw_os_error)?.join("pp_od_clk_voltage"),
     )?;
 
-    let (send, mut recv) = watch::channel(min_freq);
+    let (gov_send, gov_recv) = mpsc::channel::<GovCommand>();
+    let (ack_send, ack_recv) = mpsc::channel::<SetterAck>();
 
     let thermal_manager = ThermalManager::new().ok();
 
@@ -335,64 +356,222 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let freq_config = config.frequency_thresholds;
 
     let jh_gov: JoinHandle<()> = std::thread::spawn(move || {
-        let mut curr_freq = min_freq;
-        let mut target_freq = f32::from(min_freq);
-        let mut samples: u64 = 0;
+        let mut state = GovernorState::new(min_freq);
         let mut last_adjustment = Instant::now();
         let mut last_finetune = Instant::now();
+        let mut stats = GovernorStats::default();
 
-        let burst_mask = if gov_config.burst_samples > 0 && gov_config.burst_samples < 64 {
-            Some(!(u64::MAX << gov_config.burst_samples))
-        } else if gov_config.burst_samples >= 64 {
-            Some(u64::MAX)
-        } else {
-            None
-        };
+        let max_samples = gov_config.ramp_up_samples.max(gov_config.ramp_down_samples).max(gov_config.burst_samples as u16) as usize;
+        let mut sample_history: std::collections::VecDeque<bool> = std::collections::VecDeque::with_capacity(max_samples);
+
+        let up_samples = gov_config.ramp_up_samples as usize;
+        let down_samples = gov_config.ramp_down_samples as usize;
+        let burst_samples = gov_config.burst_samples as usize;
+
+        println!("🎯 Governor config: burst={} samples, up={} samples, down={} samples",
+                 burst_samples, up_samples, down_samples);
 
         loop {
+            while let Ok(ack) = ack_recv.try_recv() {
+                match ack {
+                    SetterAck::Applied { freq, voltage: _, latency_us } => {
+                        state.applied_freq = freq;
+                        state.pending_freq = None;
+                        state.last_ack = Instant::now();
+                        
+                        stats.record_apply(latency_us);
+                        
+                        #[cfg(feature = "debug-transitions")]
+                        if latency_us > 10_000 {
+                            eprintln!("⚠️  Slow apply detected: {}μs", latency_us);
+                        }
+                    }
+                    SetterAck::Failed { freq, error } => {
+                        eprintln!("❌ Apply failed for {}MHz: {}", freq, error);
+                        state.pending_freq = None;
+                        stats.record_failure();
+                    }
+                }
+            }
+            
+            if state.pending_freq.is_some() && state.last_ack.elapsed() > Duration::from_millis(100) {
+                eprintln!("⚠️  Setter thread appears stuck! Last ack: {}ms ago",
+                         state.last_ack.elapsed().as_millis());
+                state.pending_freq = None;
+            }
+            
             let res = dev_handle.read_mm_registers(GRBM_STATUS_REG).expect("Failed to read MM registers");
             let gui_busy = (res & (1 << GPU_ACTIVE_BIT)) > 0;
-            samples = (samples << 1) | (gui_busy as u64);
-
-            let busy_frac = (samples.count_ones() as f32) / 64.0;
-
-            let burst = burst_mask.map(|mask| samples & mask == mask).unwrap_or(false);
-
-            if burst {
-                target_freq += gov_config.ramp_rates.burst * (gov_config.intervals.sample as f32 / 1000.0);
-            } else if busy_frac > load_config.upper {
-                target_freq += gov_config.ramp_rates.normal * (gov_config.intervals.sample as f32 / 1000.0);
-            } else if busy_frac < load_config.lower {
-                target_freq -= gov_config.ramp_rates.normal * (gov_config.intervals.sample as f32 / 1000.0);
+            
+            sample_history.push_back(gui_busy);
+            if sample_history.len() > max_samples {
+                sample_history.pop_front();
             }
 
-            target_freq = target_freq.clamp(f32::from(min_freq), f32::from(max_freq));
+            let burst = if burst_samples > 0 && sample_history.len() >= burst_samples {
+                sample_history.iter().rev().take(burst_samples).all(|&b| b)
+            } else {
+                false
+            };
+            if burst {
+                stats.record_burst();
+            }
 
-            if last_adjustment.elapsed() >= Duration::from_micros(gov_config.intervals.adjust) || burst {
-                let target_freq_u16 = target_freq as u16;
-                let diff = curr_freq.abs_diff(target_freq_u16);
+            let busy_up = if sample_history.len() >= up_samples {
+                let count = sample_history.iter().rev().take(up_samples).filter(|&&b| b).count();
+                (count as f32) / (up_samples as f32)
+            } else if !sample_history.is_empty() {
+                let count = sample_history.iter().filter(|&&b| b).count();
+                (count as f32) / (sample_history.len() as f32)
+            } else {
+                0.0
+            };
+            
+            let busy_down = if sample_history.len() >= down_samples {
+                let count = sample_history.iter().rev().take(down_samples).filter(|&&b| b).count();
+                (count as f32) / (down_samples as f32)
+            } else if !sample_history.is_empty() {
+                let count = sample_history.iter().filter(|&&b| b).count();
+                (count as f32) / (sample_history.len() as f32)
+            } else {
+                0.0
+            };
 
-                let is_finetune = last_finetune.elapsed() >= Duration::from_micros(gov_config.intervals.finetune);
+            let delta_time_ms = gov_config.intervals.sample as f32 / 1000.0;
+            
+            
+            if burst {
+                state.target_freq += gov_config.ramp_rates.burst * delta_time_ms;
+            } else if busy_up > load_config.upper {
+                state.target_freq += gov_config.ramp_rates.up * delta_time_ms;
+            } else if busy_up > load_config.medium {
+                state.target_freq += gov_config.ramp_rates.up_medium * delta_time_ms;
+            } else if busy_up > load_config.slow {
+                state.target_freq += gov_config.ramp_rates.up_slow * delta_time_ms;
+            } else if busy_up > load_config.crawl {
+                state.target_freq += gov_config.ramp_rates.up_crawl * delta_time_ms;
+            } else if busy_down < load_config.lower {
+                state.target_freq -= gov_config.ramp_rates.down * delta_time_ms;
+            }
 
-                if (diff >= freq_config.adjust) || (is_finetune && diff >= freq_config.finetune) || burst {
-                    send.send(target_freq_u16);
-                    curr_freq = target_freq_u16;
-                    if is_finetune { last_finetune = Instant::now(); }
+            state.target_freq = state.target_freq.clamp(
+                f32::from(min_freq),
+                f32::from(max_freq)
+            );
+
+            let target_freq_u16 = state.target_freq as u16;
+            let diff = state.applied_freq.abs_diff(target_freq_u16);
+
+            let should_adjust = last_adjustment.elapsed() >= 
+                Duration::from_micros(gov_config.intervals.adjust);
+            let should_finetune = last_finetune.elapsed() >= 
+                Duration::from_micros(gov_config.intervals.finetune);
+
+            let should_apply = state.pending_freq.is_none() && (
+                burst ||
+                (should_adjust && diff >= freq_config.adjust) ||
+                (should_finetune && diff >= freq_config.finetune)
+            );
+
+            if should_apply {
+                if let Err(e) = gov_send.send(GovCommand::SetFrequency(target_freq_u16)) {
+                    eprintln!("❌ Failed to send command: {}", e);
+                    break;
                 }
-                last_adjustment = Instant::now();
+                state.pending_freq = Some(target_freq_u16);
+                
+                if diff >= freq_config.adjust {
+                    last_adjustment = Instant::now();
+                }
+                if diff >= freq_config.finetune {
+                    last_finetune = Instant::now();
+                }
             }
 
             std::thread::sleep(Duration::from_micros(gov_config.intervals.sample));
         }
+        
+        let _ = gov_send.send(GovCommand::Shutdown);
+        eprintln!("🛑 Governor thread exiting");
+        eprintln!("📊 Stats: Applies={} Failed={} Bursts={} AvgLatency={}μs MaxLatency={}μs Success={:.1}%",
+                 stats.total_applies, stats.failed_applies, stats.burst_activations,
+                 stats.avg_latency_us(), stats.max_latency_us, stats.success_rate());
     });
 
     let jh_set: JoinHandle<()> = std::thread::spawn(move || {
+        let mut pp_file = pp_file;
+        
         loop {
-            let freq = recv.wait();
-            let vol = *safe_points.range(freq..).next().expect("Frequency is out of safe range").1;
-            pp_file.write_all(format!("vc 0 {freq} {vol}").as_bytes()).expect("Failed to write to pp_od_clk_voltage");
-            pp_file.write_all(b"c").expect("Failed to commit to pp_od_clk_voltage");
+            match gov_recv.recv() {
+                Ok(GovCommand::SetFrequency(freq)) => {
+                    let start = Instant::now();
+                    
+                    let freq = freq.clamp(min_freq, max_freq);
+                    
+                    let vol = safe_points.range(freq..)
+                        .next()
+                        .or_else(|| safe_points.last_key_value())
+                        .map(|(_, &v)| v);
+                    
+                    let vol = match vol {
+                        Some(v) => v,
+                        None => {
+                            eprintln!("⚠️  No safe voltage for {}MHz, skipping", freq);
+                            let _ = ack_send.send(SetterAck::Failed {
+                                freq,
+                                error: "No safe voltage found".into(),
+                            });
+                            continue;
+                        }
+                    };
+                    
+                    let result = (|| -> Result<(), std::io::Error> {
+                        pp_file.write_all(format!("vc 0 {freq} {vol}").as_bytes())?;
+                        pp_file.flush()?;
+                        pp_file.write_all(b"c")?;
+                        pp_file.flush()?;
+                        Ok(())
+                    })();
+                    
+                    let latency = start.elapsed().as_micros() as u64;
+                    
+                    match result {
+                        Ok(_) => {
+                            let _ = ack_send.send(SetterAck::Applied {
+                                freq,
+                                voltage: vol,
+                                latency_us: latency,
+                            });
+                        }
+                        Err(e) => {
+                            eprintln!("⚠️  Failed to apply {}MHz @ {}mV: {}", freq, vol, e);
+                            
+                            if let Some((&safe_freq, &safe_vol)) = safe_points.first_key_value() {
+                                let _ = pp_file.write_all(format!("vc 0 {safe_freq} {safe_vol}").as_bytes());
+                                let _ = pp_file.flush();
+                                let _ = pp_file.write_all(b"c");
+                                let _ = pp_file.flush();
+                            }
+                            
+                            let _ = ack_send.send(SetterAck::Failed {
+                                freq,
+                                error: e.to_string(),
+                            });
+                        }
+                    }
+                }
+                Ok(GovCommand::Shutdown) => {
+                    eprintln!("🛑 Setter thread received shutdown signal");
+                    break;
+                }
+                Err(_) => {
+                    eprintln!("🛑 Setter thread: channel closed");
+                    break;
+                }
+            }
         }
+        
+        eprintln!("🛑 Setter thread exiting");
     });
 
     jh_set.join().unwrap();

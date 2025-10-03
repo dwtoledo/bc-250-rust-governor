@@ -14,17 +14,22 @@ safe-points = [
 ]
 
 [timing]
-burst-samples = 12
-intervals = { sample = 3000, adjust = 1000000, finetune = 5000000 }
-ramp-rates = { normal = 0.246, burst = 1.23 }
+burst-samples = 20
+ramp-up-samples = 64
+ramp-down-samples = 256
+intervals = { sample = 2000, adjust = 8000, finetune = 50000 }
+ramp-rates = { burst = 1000, up = 50, up-medium = 25, up-slow = 10, up-crawl = 2, down = 0.2 }
 
 [frequency-thresholds]
-adjust = 50
-finetune = 10
+adjust = 100
+finetune = 25
 
 [load-target]
-upper = 0.95
-lower = 0.65
+upper = 0.90
+medium = 0.80
+slow = 0.70
+crawl = 0.60
+lower = 0.40
 
 [thermal]
 monitor_interval = 1000
@@ -35,10 +40,10 @@ fan_control_index = 1
 [thermal.fan-control]
 enabled = true
 curve = [
-    [25.0, 10],
-    [40.0, 20],
+    [35.0, 10],
+    [45.0, 20],
     [55.0, 40],
-    [70.0, 60],
-    [80.0, 80],
+    [65.0, 60],
+    [75.0, 80],
     [85.0, 100],
 ]
