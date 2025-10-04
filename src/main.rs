@@ -297,6 +297,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let min_freq = safe_points.first_key_value().map(|(&k, _)| k).unwrap_or(min_engine_clock as u16);
     let max_freq = safe_points.last_key_value().map(|(&k, _)| k).unwrap_or(max_engine_clock as u16);
 
+    let current_freq = std::fs::read_to_string(
+        dev_handle.get_sysfs_path().map_err(IoError::from_raw_os_error)?.join("pp_od_clk_voltage")
+    )
+    .ok()
+    .and_then(|content| {
+        content.lines()
+            .skip_while(|line| !line.contains("OD_SCLK:"))
+            .skip(1)
+            .next()
+            .and_then(|line| {
+                line.split_whitespace()
+                    .nth(1)
+                    .and_then(|s| s.trim_end_matches("Mhz").parse::<u16>().ok())
+            })
+    })
+    .unwrap_or(min_freq);
+    
+    println!("🚀 Initial frequency: {}MHz (min: {}MHz, max: {}MHz)", current_freq, min_freq, max_freq);
+
     let pp_file = std::fs::OpenOptions::new().write(true).open(
         dev_handle.get_sysfs_path().map_err(IoError::from_raw_os_error)?.join("pp_od_clk_voltage"),
     )?;
@@ -356,7 +375,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let freq_config = config.frequency_thresholds;
 
     let jh_gov: JoinHandle<()> = std::thread::spawn(move || {
-        let mut state = GovernorState::new(min_freq);
+        let mut state = GovernorState::new(current_freq);
         let mut last_adjustment = Instant::now();
         let mut last_finetune = Instant::now();
         let mut stats = GovernorStats::default();
