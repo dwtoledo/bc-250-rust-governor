@@ -90,12 +90,10 @@ struct LoadTarget {
 struct Thermal {
     max_safe_temp: f32,
     emergency_temp: f32,
-    throttle_temp: f32,
     monitor_interval: u64,
     fan_control_index: usize,
     #[serde(rename = "fan-control")]
     fan_control: FanControl,
-    pid: PID,
 }
 
 #[derive(Deserialize, Debug)]
@@ -121,15 +119,6 @@ impl Default for PerformanceModeConfig {
 struct FanControl {
     enabled: bool,
     curve: Vec<(f32, u8)>,
-}
-
-#[derive(Deserialize, Debug, Default)]
-#[serde(deny_unknown_fields, default)]
-struct PID {
-    kp: f32,
-    ki: f32,
-    kd: f32,
-    setpoint: f32,
 }
 
 #[derive(Deserialize, Debug, Clone)]
