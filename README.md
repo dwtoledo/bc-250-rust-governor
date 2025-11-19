@@ -244,16 +244,16 @@ For any game in your Steam library:
 
 1. Right-click the game → **Properties**
 2. Go to **General** → **Launch Options**
-3. Add: `/usr/local/bin/bc250-gaming-mode.sh %command%`
+3. Add: `bc250-gaming-mode.sh %command%`
 
 Example with other tools (like MangoHUD):
 ```
-MANGOHUD=1 /usr/local/bin/bc250-gaming-mode.sh %command%
+MANGOHUD=1 bc250-gaming-mode.sh %command%
 ```
 
 Example with game launch arguments:
 ```
-/usr/local/bin/bc250-gaming-mode.sh %command% -novid -console
+bc250-gaming-mode.sh %command% -novid -console
 ```
 
 #### 3. How It Works
