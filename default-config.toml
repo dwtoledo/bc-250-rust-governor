@@ -31,6 +31,11 @@ slow = 0.70
 crawl = 0.60
 lower = 0.40
 
+[performance-mode]
+enabled = true
+control_file = "/tmp/bc250-max-performance"
+check_interval = 500
+
 [thermal]
 monitor_interval = 1000
 max_safe_temp = 85.0

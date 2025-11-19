@@ -15,7 +15,7 @@ mod thermal;
 use thermal::ThermalManager;
 
 mod governor;
-use governor::{GovCommand, GovernorState, GovernorStats, SetterAck};
+use governor::{GovCommand, GovernorState, GovernorStats, SetterAck, PerformanceMode};
 
 #[derive(Deserialize, Debug)]
 #[serde(deny_unknown_fields, default)]
@@ -28,6 +28,8 @@ struct Config {
     #[serde(rename = "safe-points")]
     safe_points: Vec<SafePoint>,
     thermal: Thermal,
+    #[serde(rename = "performance-mode")]
+    performance_mode: PerformanceModeConfig,
 }
 
 #[derive(Deserialize, Debug)]
@@ -96,6 +98,24 @@ struct Thermal {
     pid: PID,
 }
 
+#[derive(Deserialize, Debug)]
+#[serde(deny_unknown_fields, default)]
+struct PerformanceModeConfig {
+    enabled: bool,
+    control_file: String,
+    check_interval: u64,
+}
+
+impl Default for PerformanceModeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            control_file: "/tmp/bc250-max-performance".to_string(),
+            check_interval: 500,
+        }
+    }
+}
+
 #[derive(Deserialize, Debug, Default)]
 #[serde(deny_unknown_fields, default)]
 struct FanControl {
@@ -130,6 +150,7 @@ impl Default for Config {
                 SafePoint { frequency: 2000, voltage: 1000 },
             ],
             thermal: Default::default(),
+            performance_mode: Default::default(),
         }
     }
 }
@@ -373,11 +394,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let gov_config = config.timing;
     let load_config = config.load_target;
     let freq_config = config.frequency_thresholds;
+    let perf_config = config.performance_mode;
 
     let jh_gov: JoinHandle<()> = std::thread::spawn(move || {
         let mut state = GovernorState::new(current_freq);
         let mut last_adjustment = Instant::now();
         let mut last_finetune = Instant::now();
+        let mut last_perf_check = Instant::now();
         let mut stats = GovernorStats::default();
 
         let max_samples = gov_config.ramp_up_samples.max(gov_config.ramp_down_samples).max(gov_config.burst_samples as u16) as usize;
@@ -389,8 +412,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         println!("🎯 Governor config: burst={} samples, up={} samples, down={} samples",
                  burst_samples, up_samples, down_samples);
+        if perf_config.enabled {
+            println!("⚡ Max Performance mode enabled - control file: {}", perf_config.control_file);
+        }
 
         loop {
+            // Check for performance mode file
+            if perf_config.enabled && last_perf_check.elapsed() >= Duration::from_millis(perf_config.check_interval) {
+                let perf_mode_active = std::path::Path::new(&perf_config.control_file).exists();
+                let new_mode = if perf_mode_active {
+                    PerformanceMode::MaxPerformance
+                } else {
+                    PerformanceMode::Normal
+                };
+                
+                if new_mode != state.performance_mode {
+                    state.performance_mode = new_mode;
+                    match new_mode {
+                        PerformanceMode::MaxPerformance => {
+                            println!("🚀 MAX PERFORMANCE MODE ACTIVATED - Locking to {}MHz", max_freq);
+                        }
+                        PerformanceMode::Normal => {
+                            println!("🔄 Returning to normal dynamic frequency scaling");
+                        }
+                    }
+                }
+                last_perf_check = Instant::now();
+            }
+
             while let Ok(ack) = ack_recv.try_recv() {
                 match ack {
                     SetterAck::Applied { freq, voltage: _, latency_us } => {
@@ -458,19 +507,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let delta_time_ms = gov_config.intervals.sample as f32 / 1000.0;
             
-            
-            if burst {
-                state.target_freq += gov_config.ramp_rates.burst * delta_time_ms;
-            } else if busy_up > load_config.upper {
-                state.target_freq += gov_config.ramp_rates.up * delta_time_ms;
-            } else if busy_up > load_config.medium {
-                state.target_freq += gov_config.ramp_rates.up_medium * delta_time_ms;
-            } else if busy_up > load_config.slow {
-                state.target_freq += gov_config.ramp_rates.up_slow * delta_time_ms;
-            } else if busy_up > load_config.crawl {
-                state.target_freq += gov_config.ramp_rates.up_crawl * delta_time_ms;
-            } else if busy_down < load_config.lower {
-                state.target_freq -= gov_config.ramp_rates.down * delta_time_ms;
+            // If in max performance mode, lock to max frequency
+            if state.performance_mode == PerformanceMode::MaxPerformance {
+                state.target_freq = f32::from(max_freq);
+            } else {
+                // Normal dynamic frequency scaling
+                if burst {
+                    state.target_freq += gov_config.ramp_rates.burst * delta_time_ms;
+                } else if busy_up > load_config.upper {
+                    state.target_freq += gov_config.ramp_rates.up * delta_time_ms;
+                } else if busy_up > load_config.medium {
+                    state.target_freq += gov_config.ramp_rates.up_medium * delta_time_ms;
+                } else if busy_up > load_config.slow {
+                    state.target_freq += gov_config.ramp_rates.up_slow * delta_time_ms;
+                } else if busy_up > load_config.crawl {
+                    state.target_freq += gov_config.ramp_rates.up_crawl * delta_time_ms;
+                } else if busy_down < load_config.lower {
+                    state.target_freq -= gov_config.ramp_rates.down * delta_time_ms;
+                }
             }
 
             state.target_freq = state.target_freq.clamp(

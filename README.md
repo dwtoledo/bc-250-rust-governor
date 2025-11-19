@@ -150,6 +150,19 @@ lower = 0.40      # Below this, frequency ramps down
 
 These values represent the percentage of samples where the GPU was active.
 
+### Performance Mode (Gaming)
+
+The governor can lock to maximum frequency while gaming, then automatically return to dynamic scaling when you exit the game.
+
+```toml
+[performance-mode]
+enabled = true                              # Enable performance mode feature
+control_file = "/tmp/bc250-max-performance" # File to check for activation
+check_interval = 500                        # How often to check (ms)
+```
+
+When the `control_file` exists, the governor locks the GPU to maximum frequency. When removed, it returns to normal dynamic scaling.
+
 ### Thermal Configuration
 
 ```toml
@@ -162,12 +175,16 @@ fan_control_index = 1         # Fan device index to control
 [thermal.fan-control]
 enabled = true
 curve = [
-    [35.0, 10],   # At 35°C, run fan at 10%
-    [45.0, 20],   # At 45°C, run fan at 20%
-    [55.0, 40],
-    [65.0, 60],
-    [75.0, 80],
-    [85.0, 100],  # At 85°C, run fan at 100%
+    [50.0, 10], # At 50°C, run fan at 10%
+    [55.0, 20], # At 55°C, run fan at 20%
+    [60.0, 30],
+    [65.0, 40],
+    [70.0, 50],
+    [75.0, 60],
+    [80.0, 70],
+    [85.0, 80],
+    [90.0, 90],
+    [95.0, 100],
 ]
 ```
 
@@ -205,6 +222,69 @@ journalctl -u bc-250-rust-governor -f
 
 # Stop the service
 sudo systemctl stop bc-250-rust-governor
+```
+
+### Gaming Mode (Max Performance)
+
+For maximum performance in games, use the included wrapper script that locks the GPU to maximum frequency while playing:
+
+#### 1. Install the Gaming Mode Script
+
+```bash
+# Copy the script to a system location
+sudo cp bc250-gaming-mode.sh /usr/local/bin/
+
+# Make it executable
+sudo chmod +x /usr/local/bin/bc250-gaming-mode.sh
+```
+
+#### 2. Configure Steam Launch Options
+
+For any game in your Steam library:
+
+1. Right-click the game → **Properties**
+2. Go to **General** → **Launch Options**
+3. Add: `/usr/local/bin/bc250-gaming-mode.sh %command%`
+
+Example with other tools (like MangoHUD):
+```
+MANGOHUD=1 /usr/local/bin/bc250-gaming-mode.sh %command%
+```
+
+Example with game launch arguments:
+```
+/usr/local/bin/bc250-gaming-mode.sh %command% -novid -console
+```
+
+#### 3. How It Works
+
+- When the game starts, the script creates `/tmp/bc250-max-performance`
+- The governor detects this file and locks GPU to maximum frequency
+- You get consistent maximum performance throughout the gaming session
+- When you exit the game, the file is removed automatically
+- The governor returns to normal dynamic frequency scaling
+
+#### 4. Manual Control (Advanced)
+
+You can also control performance mode manually:
+
+```bash
+# Activate max performance mode
+touch /tmp/bc250-max-performance
+
+# Deactivate (return to normal)
+rm /tmp/bc250-max-performance
+```
+
+#### 5. Custom Control File Path
+
+Edit `/etc/bc-250-rust-governor/config.toml` to change the control file location:
+
+```toml
+[performance-mode]
+enabled = true
+control_file = "/tmp/my-custom-path"  # Change this
+check_interval = 500
 ```
 
 ## Tuning Tips

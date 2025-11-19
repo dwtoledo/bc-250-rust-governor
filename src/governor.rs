@@ -1,5 +1,11 @@
 use std::time::Instant;
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PerformanceMode {
+    Normal,
+    MaxPerformance,
+}
+
 #[derive(Debug, Clone)]
 pub enum GovCommand {
     SetFrequency(u16),
@@ -25,6 +31,7 @@ pub struct GovernorState {
     pub applied_freq: u16,
     pub pending_freq: Option<u16>,
     pub last_ack: Instant,
+    pub performance_mode: PerformanceMode,
 }
 
 impl GovernorState {
@@ -34,6 +41,7 @@ impl GovernorState {
             applied_freq: min_freq,
             pending_freq: None,
             last_ack: Instant::now(),
+            performance_mode: PerformanceMode::Normal,
         }
     }
 }
