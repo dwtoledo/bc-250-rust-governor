@@ -302,12 +302,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     // Use safe-points as the primary source for min/max frequencies
     // device_info() can trigger "Unsupported clock type" kernel warnings on some systems
-    let min_freq = safe_points.first_key_value().map(|(&k, _)| k).ok_or_else(|| {
-        IoError::new(ErrorKind::InvalidInput, "safe-points must have at least one entry")
-    })?;
-    let max_freq = safe_points.last_key_value().map(|(&k, _)| k).ok_or_else(|| {
-        IoError::new(ErrorKind::InvalidInput, "safe-points must have at least one entry")
-    })?;
+    let min_freq = safe_points.first_key_value().map(|(&k, _)| k).unwrap();
+    let max_freq = safe_points.last_key_value().map(|(&k, _)| k).unwrap();
 
     let current_freq = std::fs::read_to_string(
         dev_handle.get_sysfs_path().map_err(IoError::from_raw_os_error)?.join("pp_od_clk_voltage")
