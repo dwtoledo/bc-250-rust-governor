@@ -299,13 +299,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let location = BUS_INFO { domain: 0, bus: 1, dev: 0, func: 0 };
     let card = File::open(location.get_drm_render_path()?)?;
     let (dev_handle, _, _) = DeviceHandle::init(card.as_raw_fd()).map_err(IoError::from_raw_os_error)?;
-    let info = dev_handle.device_info().map_err(IoError::from_raw_os_error)?;
-
-    let min_engine_clock = info.min_engine_clock / 1000;
-    let max_engine_clock = info.max_engine_clock / 1000;
-
-    let min_freq = safe_points.first_key_value().map(|(&k, _)| k).unwrap_or(min_engine_clock as u16);
-    let max_freq = safe_points.last_key_value().map(|(&k, _)| k).unwrap_or(max_engine_clock as u16);
+    
+    // Use safe-points as the primary source for min/max frequencies
+    // device_info() can trigger "Unsupported clock type" kernel warnings on some systems
+    let min_freq = safe_points.first_key_value().map(|(&k, _)| k).ok_or_else(|| {
+        IoError::new(ErrorKind::InvalidInput, "safe-points must have at least one entry")
+    })?;
+    let max_freq = safe_points.last_key_value().map(|(&k, _)| k).ok_or_else(|| {
+        IoError::new(ErrorKind::InvalidInput, "safe-points must have at least one entry")
+    })?;
 
     let current_freq = std::fs::read_to_string(
         dev_handle.get_sysfs_path().map_err(IoError::from_raw_os_error)?.join("pp_od_clk_voltage")
