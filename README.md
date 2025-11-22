@@ -326,3 +326,7 @@ Copyright (c) 2025 Marcus Medom Ryding
 ## Contributing
 
 Contributions are welcome! Please feel free to submit issues or pull requests.
+
+## Thank you / Acknowledgements
+
+This project were based/modified on top of https://github.com/filippor/cyan-skillfish-governor (forked from https://github.com/Magnap/cyan-skillfish-governor), thanks @filippor and @Magnap for your excellent project! 
