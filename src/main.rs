@@ -20,6 +20,9 @@ use thermal::{ThermalManager, calculate_fan_speed};
 mod governor;
 use governor::{GovCommand, GovernorState, GovernorStats, SetterAck, PerformanceMode};
 
+mod gpu_metrics_fix;
+use gpu_metrics_fix::GpuUsageFix;
+
 #[derive(Deserialize, Debug)]
 #[serde(deny_unknown_fields, default)]
 struct Config {
@@ -429,16 +432,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let freq_config = config.frequency_thresholds;
     let perf_config = config.performance_mode;
 
+    let gpu_fix = match dev_handle.get_sysfs_path().map_err(IoError::from_raw_os_error) {
+        Ok(sysfs_path) => match GpuUsageFix::start(sysfs_path) {
+            Ok(fix) => Some(fix),
+            Err(e) => {
+                eprintln!("⚠️  GPU metrics fix unavailable: {}. MangoHUD may show incorrect GPU usage.", e);
+                None
+            }
+        },
+        Err(e) => {
+            eprintln!("⚠️  Could not get sysfs path for GPU metrics fix: {}", e);
+            None
+        }
+    };
+
     // Clone for governor thread
     let gov_send_clone = gov_send.clone();
     let shutdown_flag_gov = Arc::clone(&shutdown_flag);
 
     let jh_gov: JoinHandle<()> = std::thread::spawn(move || {
         let gov_send = gov_send_clone;
+        let mut gpu_fix = gpu_fix;
         let mut state = GovernorState::new(current_freq);
         let mut last_adjustment = Instant::now();
         let mut last_finetune = Instant::now();
         let mut last_perf_check = Instant::now();
+        let mut last_metrics_update = Instant::now();
         let mut stats = GovernorStats::default();
 
         let max_samples = gov_config.ramp_up_samples.max(gov_config.ramp_down_samples).max(gov_config.burst_samples as u16) as usize;
@@ -556,6 +575,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 0.0
             };
 
+            // Update patched gpu_metrics every 200ms so MangoHUD shows correct usage
+            if let Some(ref mut fix) = gpu_fix {
+                if last_metrics_update.elapsed() >= Duration::from_millis(200) {
+                    if let Err(e) = fix.set_usage_percent(busy_up * 100.0) {
+                        eprintln!("⚠️  GPU metrics fix write failed: {}", e);
+                    }
+                    last_metrics_update = Instant::now();
+                }
+            }
+
             let delta_time_ms = gov_config.intervals.sample as f32 / 1000.0;
             
             // If in max performance mode, lock to max frequency
@@ -615,6 +644,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::thread::sleep(Duration::from_micros(gov_config.intervals.sample));
         }
         
+        // Remove the bind mount before the process exits so sysfs is restored
+        if let Some(fix) = gpu_fix {
+            if let Err(e) = fix.shutdown() {
+                eprintln!("⚠️  GPU metrics fix shutdown failed: {}", e);
+            }
+        }
+
         let _ = gov_send.send(GovCommand::Shutdown);
         eprintln!("🛑 Governor thread exiting");
         eprintln!("📊 Stats: Applies={} Failed={} Bursts={} AvgLatency={}μs MaxLatency={}μs Success={:.1}%",

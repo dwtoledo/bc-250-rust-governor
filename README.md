@@ -9,6 +9,8 @@ A high-performance GPU frequency and thermal management daemon for AMD GPUs, wri
 - **Thermal Management**: Monitors GPU and CPU temperatures with emergency shutdown protection
 - **Fan Curve Control**: Automated fan speed control based on temperature curves
 - **Safe Voltage Tables**: Ensures stable operation with user-defined frequency/voltage pairs
+- **Voltage Interpolation**: Automatically interpolates voltage between safe-points for precise control
+- **MangoHUD GPU Usage Fix**: Patches the `gpu_metrics` sysfs file via bind mount so MangoHUD shows correct GPU usage instead of 655%
 - **Low Latency**: Optimized for minimal overhead and fast frequency transitions
 
 ## Requirements
@@ -185,7 +187,7 @@ safe-points = [
 
 - `frequency`: GPU clock in MHz
 - `voltage`: Core voltage in mV
-- The governor will interpolate between points to find safe voltages
+- The governor **linearly interpolates** voltage between defined points, so you don't need a point for every frequency. Only the endpoints and any notable voltage steps need to be defined.
 
 ### Timing Configuration
 
@@ -272,7 +274,38 @@ curve = [
 
 Each curve point is `[temperature_celsius, fan_speed_percent]`. The governor interpolates between points.
 
+### GPU / PCI Bus Configuration
+
+By default the governor expects the AMD GPU to be on PCI bus 1. If your system has a different layout (e.g. a machine with an iGPU on bus 0 and the dGPU on bus 3), set `pci_bus` accordingly:
+
+```toml
+[gpu]
+pci_bus = 1  # PCI bus number of the AMD GPU
+```
+
+To find the correct bus number:
+
+```bash
+lspci | grep -i vga
+# Example output: 03:00.0 VGA compatible controller: AMD ...
+#                 ^^ bus 3 → set pci_bus = 3
+```
+
 ## Usage
+
+### MangoHUD GPU Usage Fix
+
+The BC-250 GPU reports a broken `average_gfx_activity` value in its `gpu_metrics` sysfs file, causing MangoHUD to display **655% GPU usage** at all times.
+
+The governor automatically fixes this by intercepting the `gpu_metrics` file via a bind mount and injecting the real usage value it calculates from the GPU activity register. This happens transparently — no changes to MangoHUD or any other tool are needed.
+
+**Requirements:**
+- The daemon must run as **root** (already required for `pp_od_clk_voltage` writes)
+- The `mount` and `umount` binaries must be available (standard on all Linux systems)
+
+If the fix cannot be applied (e.g. not running as root), the governor logs a warning and continues normally — frequency management is unaffected.
+
+On shutdown (Ctrl+C, service stop, or thermal emergency), the bind mount is cleanly removed and `gpu_metrics` returns to its original kernel-provided state.
 
 ### Running Manually
 
@@ -401,6 +434,24 @@ Adjust your `safe-points` in `/etc/bc-250-rust-governor/config.toml` to match yo
 
 ```bash
 sudo systemctl restart bc-250-rust-governor
+```
+
+### MangoHUD Showing 655% GPU Usage
+
+This is a known hardware bug on the BC-250: the GPU reports `0xFFFF` in the `average_gfx_activity` field of `gpu_metrics`, which MangoHUD interprets as 655.35%.
+
+The governor fixes this automatically when running as root. Check the logs to confirm it is active:
+
+```bash
+journalctl -u bc-250-rust-governor | grep "GPU metrics fix"
+# Should show: ✅ GPU metrics fix active: /sys/...gpu_metrics shadowed with patched copy
+```
+
+If you see `⚠️  GPU metrics fix unavailable`, the most likely cause is the daemon not running as root. Verify the service user in the systemd unit file:
+
+```bash
+sudo systemctl cat bc-250-rust-governor | grep User
+# Should be empty (runs as root) or "User=root"
 ```
 
 ### Fan Control Not Working

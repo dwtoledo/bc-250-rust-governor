@@ -1,7 +1,7 @@
 safe-points = [
-    { frequency = 350, voltage = 570 },
-    { frequency = 860, voltage = 600 },
-    { frequency = 1090, voltage = 650 },
+    { frequency = 350, voltage = 700 },
+    { frequency = 860, voltage = 700 },
+    { frequency = 1090, voltage = 700 },
     { frequency = 1280, voltage = 700 },
     { frequency = 1460, voltage = 750 },
     { frequency = 1620, voltage = 800 },
