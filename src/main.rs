@@ -4,7 +4,10 @@ use std::{
     fs::File,
     io::{Error as IoError, ErrorKind, Write},
     os::fd::AsRawFd,
-    sync::mpsc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc,
+    },
     thread::JoinHandle,
     time::{Duration, Instant},
 };
@@ -12,7 +15,7 @@ use std::{
 use libdrm_amdgpu_sys::{AMDGPU::DeviceHandle, PCI::BUS_INFO};
 
 mod thermal;
-use thermal::ThermalManager;
+use thermal::{ThermalManager, calculate_fan_speed};
 
 mod governor;
 use governor::{GovCommand, GovernorState, GovernorStats, SetterAck, PerformanceMode};
@@ -30,6 +33,7 @@ struct Config {
     thermal: Thermal,
     #[serde(rename = "performance-mode")]
     performance_mode: PerformanceModeConfig,
+    gpu: Gpu,
 }
 
 #[derive(Deserialize, Debug)]
@@ -121,6 +125,18 @@ struct FanControl {
     curve: Vec<(f32, u8)>,
 }
 
+#[derive(Deserialize, Debug)]
+#[serde(deny_unknown_fields, default)]
+struct Gpu {
+    pci_bus: u8,
+}
+
+impl Default for Gpu {
+    fn default() -> Self {
+        Self { pci_bus: 1 }
+    }
+}
+
 #[derive(Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
 struct SafePoint {
@@ -140,6 +156,7 @@ impl Default for Config {
             ],
             thermal: Default::default(),
             performance_mode: Default::default(),
+            gpu: Default::default(),
         }
     }
 }
@@ -204,33 +221,42 @@ impl Default for LoadTarget {
 const GRBM_STATUS_REG: u32 = 0x2004;
 const GPU_ACTIVE_BIT: u8 = 31;
 
-fn calculate_fan_speed(temp: f32, curve: &[(f32, u8)]) -> u8 {
-    if curve.is_empty() {
-        return 0;
+/// Interpolates voltage between safe-points for a given frequency.
+/// Returns None if safe_points is empty.
+fn interpolate_voltage(freq: u16, safe_points: &BTreeMap<u16, u16>) -> Option<u16> {
+    if safe_points.is_empty() {
+        return None;
     }
 
-    if temp <= curve[0].0 {
-        return curve[0].1;
-    }
-
-    if let Some(last_point) = curve.last() {
-        if temp >= last_point.0 {
-            return last_point.1;
+    // If freq is at or below the minimum safe-point, use its voltage
+    if let Some((&first_freq, &first_vol)) = safe_points.first_key_value() {
+        if freq <= first_freq {
+            return Some(first_vol);
         }
     }
 
-    for i in 0..curve.len() - 1 {
-        let p1 = curve[i];
-        let p2 = curve[i + 1];
-        if temp >= p1.0 && temp <= p2.0 {
-            let (temp1, speed1) = (p1.0, p1.1 as f32);
-            let (temp2, speed2) = (p2.0, p2.1 as f32);
-            let ratio = (temp - temp1) / (temp2 - temp1);
-            return (speed1 + ratio * (speed2 - speed1)) as u8;
+    // If freq is at or above the maximum safe-point, use its voltage
+    if let Some((&last_freq, &last_vol)) = safe_points.last_key_value() {
+        if freq >= last_freq {
+            return Some(last_vol);
         }
     }
 
-    curve.last().map_or(0, |p| p.1)
+    // Find the two safe-points that bracket our frequency
+    let lower = safe_points.range(..=freq).next_back();
+    let upper = safe_points.range(freq..).next();
+
+    match (lower, upper) {
+        (Some((&f1, &v1)), Some((&f2, &v2))) if f1 != f2 => {
+            // Linear interpolation: v = v1 + (v2 - v1) * (freq - f1) / (f2 - f1)
+            let ratio = (freq - f1) as f32 / (f2 - f1) as f32;
+            let interpolated = v1 as f32 + ratio * (v2 as f32 - v1 as f32);
+            Some(interpolated.round() as u16)
+        }
+        (Some((_, &v)), _) => Some(v),
+        (_, Some((_, &v))) => Some(v),
+        _ => None,
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -296,7 +322,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )));
     }
 
-    let location = BUS_INFO { domain: 0, bus: 1, dev: 0, func: 0 };
+    let location = BUS_INFO { domain: 0, bus: config.gpu.pci_bus, dev: 0, func: 0 };
     let card = File::open(location.get_drm_render_path()?)?;
     let (dev_handle, _, _) = DeviceHandle::init(card.as_raw_fd()).map_err(IoError::from_raw_os_error)?;
     let info = dev_handle.device_info().map_err(IoError::from_raw_os_error)?;
@@ -314,8 +340,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     .and_then(|content| {
         content.lines()
             .skip_while(|line| !line.contains("OD_SCLK:"))
-            .skip(1)
-            .next()
+            .nth(1)
             .and_then(|line| {
                 line.split_whitespace()
                     .nth(1)
@@ -332,14 +357,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (gov_send, gov_recv) = mpsc::channel::<GovCommand>();
     let (ack_send, ack_recv) = mpsc::channel::<SetterAck>();
+    
+    // Shared shutdown flag for graceful termination
+    let shutdown_flag = Arc::new(AtomicBool::new(false));
+
+    // Register Ctrl+C handler for graceful shutdown
+    let shutdown_flag_signal = Arc::clone(&shutdown_flag);
+    ctrlc::set_handler(move || {
+        eprintln!("\n🛑 Ctrl+C detectado! Iniciando desligamento seguro...");
+        shutdown_flag_signal.store(true, Ordering::SeqCst);
+    }).expect("Erro ao definir handler de Ctrl+C");
 
     let thermal_manager = ThermalManager::new().ok();
+    let thermal_manager_clone = thermal_manager.clone();
 
     let thermal_jh = if let Some(tm) = thermal_manager {
         let thermal_config = config.thermal;
+        let shutdown_flag_thermal = Arc::clone(&shutdown_flag);
         Some(std::thread::spawn(move || {
             let mut last_thermal_check = Instant::now();
             loop {
+                // Check for shutdown signal
+                if shutdown_flag_thermal.load(Ordering::SeqCst) {
+                    eprintln!("🛑 Thermal thread received shutdown signal");
+                    break;
+                }
+
                 if last_thermal_check.elapsed() >= Duration::from_millis(thermal_config.monitor_interval) {
                     let thermal_status = tm.get_thermal_status();
                     let (pwm_opt, fan_idx_opt) = tm.get_primary_fan_info(thermal_config.fan_control_index);
@@ -354,7 +397,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if thermal_status.max_temperature > thermal_config.emergency_temp {
                         eprintln!("🚨 EMERGENCY: Temp {:.1}°C > {:.1}°C. Shutting down!",
                             thermal_status.max_temperature, thermal_config.emergency_temp);
-                        std::process::exit(1);
+                        shutdown_flag_thermal.store(true, Ordering::SeqCst);
+                        break;
                     } else if thermal_status.max_temperature > thermal_config.max_safe_temp {
                         eprintln!("🔥 THERMAL WARNING: {:.1}°C > {:.1}°C",
                             thermal_status.max_temperature, thermal_config.max_safe_temp);
@@ -385,7 +429,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let freq_config = config.frequency_thresholds;
     let perf_config = config.performance_mode;
 
+    // Clone for governor thread
+    let gov_send_clone = gov_send.clone();
+    let shutdown_flag_gov = Arc::clone(&shutdown_flag);
+
     let jh_gov: JoinHandle<()> = std::thread::spawn(move || {
+        let gov_send = gov_send_clone;
         let mut state = GovernorState::new(current_freq);
         let mut last_adjustment = Instant::now();
         let mut last_finetune = Instant::now();
@@ -406,6 +455,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         loop {
+            // Check for shutdown signal
+            if shutdown_flag_gov.load(Ordering::SeqCst) {
+                eprintln!("🛑 Governor thread received shutdown signal");
+                break;
+            }
+
             // Check for performance mode file
             if perf_config.enabled && last_perf_check.elapsed() >= Duration::from_millis(perf_config.check_interval) {
                 let perf_mode_active = std::path::Path::new(&perf_config.control_file).exists();
@@ -431,7 +486,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             while let Ok(ack) = ack_recv.try_recv() {
                 match ack {
-                    SetterAck::Applied { freq, voltage: _, latency_us } => {
+                    SetterAck::Applied { freq, latency_us } => {
                         state.applied_freq = freq;
                         state.pending_freq = None;
                         state.last_ack = Instant::now();
@@ -457,7 +512,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 state.pending_freq = None;
             }
             
-            let res = dev_handle.read_mm_registers(GRBM_STATUS_REG).expect("Failed to read MM registers");
+            // Read GPU activity register with graceful error handling
+            let res = match dev_handle.read_mm_registers(GRBM_STATUS_REG) {
+                Ok(value) => value,
+                Err(e) => {
+                    eprintln!("⚠️  Failed to read MM registers: {}. Assuming GPU idle.", e);
+                    0 // Assume GPU is idle on error
+                }
+            };
             let gui_busy = (res & (1 << GPU_ACTIVE_BIT)) > 0;
             
             sample_history.push_back(gui_busy);
@@ -570,10 +632,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     
                     let freq = freq.clamp(min_freq, max_freq);
                     
-                    let vol = safe_points.range(freq..)
-                        .next()
-                        .or_else(|| safe_points.last_key_value())
-                        .map(|(_, &v)| v);
+                    // Interpolate voltage between safe-points
+                    let vol = interpolate_voltage(freq, &safe_points);
                     
                     let vol = match vol {
                         Some(v) => v,
@@ -601,7 +661,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Ok(_) => {
                             let _ = ack_send.send(SetterAck::Applied {
                                 freq,
-                                voltage: vol,
                                 latency_us: latency,
                             });
                         }
@@ -636,11 +695,62 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("🛑 Setter thread exiting");
     });
 
-    jh_set.join().unwrap();
-    jh_gov.join().unwrap();
-    if let Some(jh) = thermal_jh {
-        jh.join().unwrap();
+    // Wait for shutdown signal (blocking poll with timeout for graceful shutdown)
+    loop {
+        if shutdown_flag.load(Ordering::SeqCst) {
+            eprintln!("🛑 Shutdown initiated...");
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
     }
 
+    // Send shutdown command to setter thread
+    eprintln!("🛑 Stopping governor and setter threads...");
+    let _ = gov_send.send(GovCommand::Shutdown);
+
+    // Wait for threads to finish with timeout
+    let timeout = Duration::from_secs(5);
+    let start = Instant::now();
+
+    // Join governor thread
+    while start.elapsed() < timeout {
+        if jh_gov.is_finished() {
+            let _ = jh_gov.join();
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    // Join setter thread  
+    let start = Instant::now();
+    while start.elapsed() < timeout {
+        if jh_set.is_finished() {
+            let _ = jh_set.join();
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    // Join thermal thread
+    if let Some(jh) = thermal_jh {
+        let start = Instant::now();
+        while start.elapsed() < timeout {
+            if jh.is_finished() {
+                let _ = jh.join();
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    // Restore fans to automatic control
+    if let Some(tm) = thermal_manager_clone {
+        eprintln!("🔄 Restoring fans to automatic control...");
+        if let Err(e) = tm.restore_auto_fan_control() {
+            eprintln!("⚠️  Failed to restore fan control: {}", e);
+        }
+    }
+
+    eprintln!("🛑 Shutdown complete.");
     Ok(())
 }

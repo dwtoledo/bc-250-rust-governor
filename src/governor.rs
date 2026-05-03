@@ -16,8 +16,6 @@ pub enum GovCommand {
 pub enum SetterAck {
     Applied {
         freq: u16,
-        #[allow(dead_code)]
-        voltage: u16,
         latency_us: u64,
     },
     Failed {
@@ -53,14 +51,10 @@ pub struct GovernorStats {
     pub burst_activations: u64,
     pub total_latency_us: u64,
     pub max_latency_us: u64,
-    pub start_time: Option<Instant>,
 }
 
 impl GovernorStats {
     pub fn record_apply(&mut self, latency_us: u64) {
-        if self.start_time.is_none() {
-            self.start_time = Some(Instant::now());
-        }
         self.total_applies += 1;
         self.total_latency_us += latency_us;
         self.max_latency_us = self.max_latency_us.max(latency_us);

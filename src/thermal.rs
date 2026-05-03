@@ -18,7 +18,7 @@ pub struct FanControl {
     pub enable_path: Option<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ThermalManager {
     pub sensors: Vec<ThermalSensor>,
     pub fans: Vec<FanControl>,
@@ -36,43 +36,39 @@ impl ThermalManager {
         let mut nct6687_available = false;
 
         let pattern = format!("{}/hwmon*", hwmon_root.trim_end_matches('/'));
-        for entry in glob(&pattern).unwrap() {
-            if let Ok(hwmon_path) = entry {
-                if let Ok(name) = fs::read_to_string(hwmon_path.join("name")) {
-                    let name = name.trim().to_string();
-                    let path = hwmon_path.to_string_lossy().to_string();
+        for hwmon_path in glob(&pattern).unwrap().flatten() {
+            if let Ok(name) = fs::read_to_string(hwmon_path.join("name")) {
+                let name = name.trim().to_string();
+                let path = hwmon_path.to_string_lossy().to_string();
 
-                    if hwmon_path.join("temp1_input").exists() {
-                        sensors.push(ThermalSensor {
-                            name: name.clone(),
-                            temp_input: hwmon_path.join("temp1_input").to_string_lossy().to_string(),
-                        });
-                    }
+                if hwmon_path.join("temp1_input").exists() {
+                    sensors.push(ThermalSensor {
+                        name: name.clone(),
+                        temp_input: hwmon_path.join("temp1_input").to_string_lossy().to_string(),
+                    });
+                }
 
-                    if name.starts_with("nct6687") || name.starts_with("nct6686") {
-                        nct6687_available = true;
-                        
-                        for pwm_entry in glob(&format!("{}/pwm*", path)).unwrap_or_else(|_| glob("").unwrap()) {
-                            if let Ok(pwm_path) = pwm_entry {
-                                if pwm_path.to_string_lossy().contains("_enable") {
-                                    continue;
-                                }
-                                
-                                let pwm_name = pwm_path.file_name()
-                                    .unwrap_or_default()
-                                    .to_string_lossy()
-                                    .to_string();
-                                
-                                let enable_path = format!("{}_enable", pwm_path.to_string_lossy());
-                                let enable_exists = Path::new(&enable_path).exists();
-
-                                fans.push(FanControl {
-                                    name: format!("{}_{}", name, pwm_name),
-                                    pwm_path: Some(pwm_path.to_string_lossy().to_string()),
-                                    enable_path: if enable_exists { Some(enable_path) } else { None },
-                                });
-                            }
+                if name.starts_with("nct6687") || name.starts_with("nct6686") {
+                    nct6687_available = true;
+                    
+                    for pwm_path in glob(&format!("{}/pwm*", path)).unwrap_or_else(|_| glob("").unwrap()).flatten() {
+                        if pwm_path.to_string_lossy().contains("_enable") {
+                            continue;
                         }
+                        
+                        let pwm_name = pwm_path.file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .to_string();
+                        
+                        let enable_path = format!("{}_enable", pwm_path.to_string_lossy());
+                        let enable_exists = Path::new(&enable_path).exists();
+
+                        fans.push(FanControl {
+                            name: format!("{}_{}", name, pwm_name),
+                            pwm_path: Some(pwm_path.to_string_lossy().to_string()),
+                            enable_path: if enable_exists { Some(enable_path) } else { None },
+                        });
                     }
                 }
             }
@@ -114,18 +110,20 @@ impl ThermalManager {
     }
 
     pub fn get_max_temperature(&self) -> Result<f32, IoError> {
-        let mut max_temp: f32 = 0.0;
-        
+        let mut max_temp: f32 = f32::NEG_INFINITY;
+        let mut found_any = false;
+
         for sensor in &self.sensors {
             if let Ok(temp) = self.read_temperature(&sensor.name) {
                 max_temp = max_temp.max(temp);
+                found_any = true;
             }
         }
-        
-        if max_temp == 0.0 {
-            Err(IoError::new(ErrorKind::NotFound, "No temperature readings available"))
-        } else {
+
+        if found_any {
             Ok(max_temp)
+        } else {
+            Err(IoError::new(ErrorKind::NotFound, "No temperature readings available"))
         }
     }
     pub fn set_fan_speed(&self, fan_index: usize, speed_percent: u8) -> Result<(), IoError> {
@@ -253,6 +251,23 @@ impl ThermalManager {
         println!("Pulse complete");
         Ok(())
     }
+
+    pub fn restore_auto_fan_control(&self) -> Result<(), IoError> {
+        if !self.nct6687_available {
+            return Ok(());
+        }
+
+        for (i, fan) in self.fans.iter().enumerate() {
+            if let Some(enable_path) = &fan.enable_path {
+                match fs::write(enable_path, "2") {
+                    Ok(_) => println!("🔄 Fan {} restored to automatic control", i),
+                    Err(e) => eprintln!("⚠️  Failed to restore fan {} to auto: {}", i, e),
+                }
+            }
+        }
+        
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -262,3 +277,31 @@ pub struct ThermalStatus {
     pub cpu_temperature: f32,
 }
 
+pub fn calculate_fan_speed(temp: f32, curve: &[(f32, u8)]) -> u8 {
+    if curve.is_empty() {
+        return 0;
+    }
+
+    if temp <= curve[0].0 {
+        return curve[0].1;
+    }
+
+    if let Some(last_point) = curve.last() {
+        if temp >= last_point.0 {
+            return last_point.1;
+        }
+    }
+
+    for i in 0..curve.len() - 1 {
+        let p1 = curve[i];
+        let p2 = curve[i + 1];
+        if temp >= p1.0 && temp <= p2.0 {
+            let (temp1, speed1) = (p1.0, p1.1 as f32);
+            let (temp2, speed2) = (p2.0, p2.1 as f32);
+            let ratio = (temp - temp1) / (temp2 - temp1);
+            return (speed1 + ratio * (speed2 - speed1)) as u8;
+        }
+    }
+
+    curve.last().map_or(0, |p| p.1)
+}

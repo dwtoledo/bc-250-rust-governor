@@ -36,6 +36,9 @@ enabled = true
 control_file = "/tmp/bc250-max-performance"
 check_interval = 500
 
+[gpu]
+pci_bus = 1  # PCI bus number of the AMD GPU (check with: lspci | grep -i vga)
+
 [thermal]
 monitor_interval = 1000
 max_safe_temp = 85.0

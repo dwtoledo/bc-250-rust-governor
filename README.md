@@ -20,7 +20,9 @@ A high-performance GPU frequency and thermal management daemon for AMD GPUs, wri
 
 ## Installation
 
-### 1. Build the Project
+### Standard Linux Installation
+
+#### 1. Build the Project
 
 ```bash
 # Navigate to the project directory
@@ -32,7 +34,65 @@ cargo build --release
 
 The compiled binary will be at `target/release/bc-250-rust-governor`.
 
-### 2. Install the Binary
+### Bazzite / Immutable OS Installation
+
+For Bazzite and other immutable Linux distributions (Fedora Silverblue, Kinoite, etc.):
+
+#### 1. Build the Project Using Distrobox
+
+Since Bazzite uses an immutable filesystem, you need to build inside a container:
+
+```bash
+# Create a development container
+distrobox create rust-dev
+
+# Enter the container
+distrobox enter rust-dev
+
+# Inside the container, install build dependencies
+sudo dnf install gcc libdrm-devel
+
+# Navigate to the project directory
+cd /home/bazzite/Documents/bc-250-rust-governor
+
+# Build the release binary
+cargo build --release
+
+# Exit the container
+exit
+```
+
+The compiled binary will be at `target/release/bc-250-rust-governor`.
+
+#### 2. Important: Adjust Voltage Values for Non-Patched Kernels
+
+If your kernel doesn't have the full VDDC patch, you need to adjust voltage values in `default-config.toml` before installation.
+
+Check your kernel limits:
+```bash
+cat /sys/class/drm/card*/device/pp_od_clk_voltage
+```
+
+If you see `VDDC: 700mV 1129mV` (instead of `570mV 1050mV`), edit the safe-points to use minimum 700mV:
+
+```toml
+safe-points = [
+    { frequency = 350, voltage = 700 },
+    { frequency = 860, voltage = 700 },
+    { frequency = 1090, voltage = 700 },
+    { frequency = 1280, voltage = 700 },
+    { frequency = 1460, voltage = 750 },
+    { frequency = 1620, voltage = 800 },
+    { frequency = 1760, voltage = 850 },
+    { frequency = 1890, voltage = 900 },
+    { frequency = 2030, voltage = 950 },
+    { frequency = 2090, voltage = 975 },
+    { frequency = 2140, voltage = 1000 },
+    { frequency = 2230, voltage = 1050 },
+]
+```
+
+#### 3. Install the Binary
 
 ```bash
 # Copy the binary to system path
@@ -42,7 +102,7 @@ sudo cp target/release/bc-250-rust-governor /usr/local/bin/
 sudo chmod +x /usr/local/bin/bc-250-rust-governor
 ```
 
-### 3. Setup Configuration
+#### 4. Setup Configuration
 
 ```bash
 # Create configuration directory
@@ -51,11 +111,13 @@ sudo mkdir -p /etc/bc-250-rust-governor
 # Copy the default configuration file
 sudo cp default-config.toml /etc/bc-250-rust-governor/config.toml
 
-# Edit the configuration (optional)
+# Edit the configuration if needed
 sudo nano /etc/bc-250-rust-governor/config.toml
 ```
 
-### 4. Install and Enable the System Service
+**Important for Bazzite users**: If you adjusted voltage values in step 2, make sure to apply the same changes to `/etc/bc-250-rust-governor/config.toml`.
+
+#### 5. Install and Enable the System Service
 
 ```bash
 # Copy the systemd service file
@@ -74,7 +136,7 @@ sudo systemctl start bc-250-rust-governor
 sudo systemctl status bc-250-rust-governor
 ```
 
-### 5. Verify Installation
+#### 6. Verify Installation
 
 ```bash
 # View real-time logs
@@ -83,6 +145,26 @@ journalctl -u bc-250-rust-governor -f
 # Check for errors
 journalctl -u bc-250-rust-governor -n 50
 ```
+
+The service should be running without "Invalid argument" errors. If you see voltage-related errors, double-check your safe-points configuration.
+
+#### 7. Install Gaming Mode Script (Optional)
+
+For automatic maximum performance when gaming:
+
+```bash
+# Copy the script to system path
+sudo cp bc250-gaming-mode.sh /usr/local/bin/
+
+# Make it executable
+sudo chmod +x /usr/local/bin/bc250-gaming-mode.sh
+
+# Test the script
+/usr/local/bin/bc250-gaming-mode.sh echo "test"
+# Should create /tmp/bc250-max-performance and remove it after test
+```
+
+See the [Gaming Mode](#gaming-mode-max-performance) section for Steam configuration.
 
 ## Configuration
 
@@ -303,12 +385,38 @@ check_interval = 500
 - Verify safe-points are defined correctly
 - Check logs: `journalctl -u bc-250-rust-governor -f`
 
+### Voltage Errors ("Invalid argument (os error 22)")
+
+This usually means your voltages are outside the kernel's accepted range. Check your limits:
+
+```bash
+cat /sys/class/drm/card*/device/pp_od_clk_voltage
+```
+
+Look for the `OD_RANGE` section:
+- If `VDDC: 700mV 1129mV` → Your kernel requires minimum 700mV
+- If `VDDC: 570mV 1050mV` → Your kernel has the full patch
+
+Adjust your `safe-points` in `/etc/bc-250-rust-governor/config.toml` to match your kernel's limits, then restart:
+
+```bash
+sudo systemctl restart bc-250-rust-governor
+```
+
 ### Fan Control Not Working
 
 - List fans: `bc-250-rust-governor --list`
-- Check if `nct6687` module is loaded: `lsmod | grep nct6687`
+- Check if `nct6687` module is loaded: `cat /proc/modules | grep nct6687`
 - Verify `fan_control_index` matches your desired fan
-- Test manually: `bc-250-rust-governor --pulse-fan 1`
+- Test manually (requires sudo): `sudo bc-250-rust-governor --pulse-fan 1`
+
+### Bazzite-Specific Issues
+
+**Build fails with "command not found"**: Make sure you're inside the distrobox container when building.
+
+**"Read-only file system" when installing**: This is expected on Bazzite. Only install to `/usr/local/bin` (which is writable) and `/etc` (also writable). Never try to modify `/usr` directly.
+
+**Gaming mode not working**: The gaming mode uses `/tmp` which is always writable on Bazzite. No special setup needed!
 
 ### High Temperatures
 
