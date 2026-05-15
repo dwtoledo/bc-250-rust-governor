@@ -80,24 +80,28 @@ If you see `VDDC: 700mV 1129mV` (instead of `570mV 1050mV`), edit the safe-point
 
 ```toml
 safe-points = [
-    { frequency = 350, voltage = 700 },
-    { frequency = 860, voltage = 700 },
-    { frequency = 1090, voltage = 700 },
-    { frequency = 1280, voltage = 700 },
-    { frequency = 1460, voltage = 750 },
-    { frequency = 1620, voltage = 800 },
-    { frequency = 1760, voltage = 850 },
-    { frequency = 1890, voltage = 900 },
-    { frequency = 2030, voltage = 950 },
-    { frequency = 2090, voltage = 975 },
-    { frequency = 2140, voltage = 1000 },
-    { frequency = 2230, voltage = 1050 },
+    { frequency = 350,  voltage = 700 },
+    { frequency = 860,  voltage = 715 },
+    { frequency = 1090, voltage = 750 },
+    { frequency = 1280, voltage = 790 },
+    { frequency = 1460, voltage = 835 },
+    { frequency = 1620, voltage = 880 },
+    { frequency = 1760, voltage = 925 },
+    { frequency = 1890, voltage = 970 },
+    { frequency = 2030, voltage = 1025 },
+    { frequency = 2090, voltage = 1055 },
+    { frequency = 2140, voltage = 1085 },
+    { frequency = 2230, voltage = 1129 },
 ]
 ```
 
 #### 3. Install the Binary
 
 ```bash
+
+# Move console to project folder
+cd /home/bazzite/Documents/bc-250-rust-governor
+
 # Copy the binary to system path
 sudo cp target/release/bc-250-rust-governor /usr/local/bin/
 
