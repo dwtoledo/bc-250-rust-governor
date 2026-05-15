@@ -53,6 +53,7 @@ distrobox enter rust-dev
 
 # Inside the container, install build dependencies
 sudo dnf install gcc libdrm-devel
+sudo dnf install rust cargo
 
 # Navigate to the project directory
 cd /home/bazzite/Documents/bc-250-rust-governor
