@@ -94,6 +94,7 @@ pub fn should_request_clock(
 ) -> bool {
     !skipping
         && !pending
+        && diff > 0
         && (burst
             || (adjust_due && diff >= adjust_threshold)
             || (finetune_due && diff >= finetune_threshold))
@@ -477,8 +478,11 @@ mod tests {
     }
 
     #[test]
-    fn burst_requests_a_write_even_when_the_clock_already_matches() {
+    fn burst_requests_immediate_write_on_any_diff() {
         assert!(should_request_clock(
+            false, false, true, false, false, 1, 100, 25
+        ));
+        assert!(!should_request_clock(
             false, false, true, false, false, 0, 100, 25
         ));
     }
