@@ -1,14 +1,20 @@
 use std::time::Instant;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PerformanceMode {
     Normal,
-    MaxPerformance,
+    Fixed(u16),
+    Range { min: u16, max: u16 },
 }
 
 #[derive(Debug, Clone)]
 pub enum GovCommand {
     SetFrequency(u16),
+    /// Frequency and voltage taken from the built-in config, without interpolation.
+    SetExact {
+        frequency: u16,
+        voltage: u16,
+    },
     Shutdown,
 }
 
@@ -16,12 +22,22 @@ pub enum GovCommand {
 pub enum SetterAck {
     Applied {
         freq: u16,
+        voltage: u16,
         latency_us: u64,
     },
     Failed {
         freq: u16,
+        voltage: u16,
         error: String,
     },
+    /// The requested pair was refused. A neighboring safe-point was applied instead.
+    Recovered {
+        requested: u16,
+        freq: u16,
+        latency_us: u64,
+    },
+    /// The requested pair and every neighboring safe-point were refused.
+    Exhausted { requested: u16 },
 }
 
 pub struct GovernorState {

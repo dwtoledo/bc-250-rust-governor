@@ -241,7 +241,7 @@ These values represent the percentage of samples where the GPU was active.
 
 ### Performance Mode (Gaming)
 
-The governor can lock to maximum frequency while gaming, then automatically return to dynamic scaling when you exit the game.
+The governor can lock to maximum frequency, a custom fixed frequency, or a constrained dynamic range while gaming, then automatically return to standard dynamic scaling when you exit the game.
 
 ```toml
 [performance-mode]
@@ -250,7 +250,28 @@ control_file = "/tmp/bc250-max-performance" # File to check for activation
 check_interval = 500                        # How often to check (ms)
 ```
 
-When the `control_file` exists, the governor locks the GPU to maximum frequency. When removed, it returns to normal dynamic scaling.
+The behavior depends on the content of the `control_file`:
+- **Empty file or `"max"`**: Locks the GPU to maximum safe frequency (`max_freq`).
+- **Single number (e.g. `1600`)**: Locks the GPU to that exact frequency (clamped between `min_freq` and `max_freq`).
+- **Two numbers (e.g. `800 1600`)**: Restricts dynamic scaling to that range (`800 MHz` to `1600 MHz`).
+- **File removed**: Returns immediately to normal dynamic frequency scaling.
+
+#### Game Launcher Script (`scripts/bc250-game`)
+
+A wrapper script is provided to automatically activate and deactivate performance mode when launching a game or benchmark:
+
+```bash
+# Full maximum performance
+./scripts/bc250-game %command%
+
+# Fixed frequency at 1600 MHz (great for cooler/quieter operation)
+./scripts/bc250-game 1600 %command%
+
+# Dynamic scaling restricted between 800 MHz and 1600 MHz
+./scripts/bc250-game 800 1600 %command%
+```
+
+In Steam, simply add it to the game's **Launch Options** (e.g., `/path/to/bc250-game 1600 %command%`). When the game closes, the script traps the exit and automatically cleans up the control file.
 
 ### Thermal Configuration
 
@@ -278,6 +299,8 @@ curve = [
 ```
 
 Each curve point is `[temperature_celsius, fan_speed_percent]`. The governor interpolates between points.
+
+If `[thermal]`, `[thermal.fan-control]`, or another section other than `safe-points` is missing, those values come from the built-in config. The built-in timing, load, and fan values match the file below. The file on disk is not rewritten. Set `enabled = false` to leave the fan alone.
 
 ### GPU / PCI Bus Configuration
 
@@ -318,7 +341,7 @@ On shutdown (Ctrl+C, service stop, or thermal emergency), the bind mount is clea
 # With default config path
 sudo bc-250-rust-governor /etc/bc-250-rust-governor/config.toml
 
-# List available thermal sensors and fans
+# List fan indexes for fan_control_index
 bc-250-rust-governor --list
 
 # Show current fan speeds

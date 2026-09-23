@@ -1,16 +1,9 @@
+# Written only when the config file is missing. One point is both the floor
+# and the ceiling. Kernels without the full OD patch reject a low floor such
+# as 350 MHz. Replace this table with default-config.toml after checking
+# pp_od_clk_voltage and the cooling.
 safe-points = [
-    { frequency = 350, voltage = 700 },
-    { frequency = 860, voltage = 700 },
-    { frequency = 1090, voltage = 700 },
-    { frequency = 1280, voltage = 700 },
-    { frequency = 1460, voltage = 750 },
-    { frequency = 1620, voltage = 800 },
-    { frequency = 1760, voltage = 850 },
-    { frequency = 1890, voltage = 900 },
-    { frequency = 2030, voltage = 950 },
-    { frequency = 2090, voltage = 975 },
-    { frequency = 2140, voltage = 1000 },
-    { frequency = 2230, voltage = 1050 },
+    { frequency = 1500, voltage = 775 },
 ]
 
 [timing]
@@ -45,10 +38,6 @@ max_safe_temp = 85.0
 emergency_temp = 95.0
 fan_control_index = 1
 
-# If a section other than safe-points, or a key inside it, is omitted, the
-# service fills it from the built-in config. That built-in copy uses the same
-# timing, load, and fan values as this file.
-# Set enabled = false to leave the fan alone.
 [thermal.fan-control]
 enabled = true
 curve = [

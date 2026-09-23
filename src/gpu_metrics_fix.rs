@@ -62,7 +62,10 @@ impl GpuUsageFix {
         // No external process can accidentally write to it.
         fs::remove_file(PATCHED_METRICS_PATH)?;
 
-        eprintln!("✅ GPU metrics fix active: {} shadowed with patched copy", real_metrics_path);
+        eprintln!(
+            "✅ GPU metrics fix active: {} shadowed with patched copy",
+            real_metrics_path
+        );
 
         Ok(Self {
             real_file,

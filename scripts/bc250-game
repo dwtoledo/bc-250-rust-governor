@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+#
+# bc250-game: Run a command/game with custom BC-250 performance profile
+#
+# Usage:
+#   bc250-game %command%                    # Maximum performance (locks to max_freq)
+#   bc250-game 1600 %command%               # Fixed frequency (locks to 1600 MHz)
+#   bc250-game 800 1600 %command%           # Range lock (dynamic scaling between 800 and 1600 MHz)
+#
+# Steam Launch Option examples:
+#   bc250-game %command%
+#   bc250-game 1600 %command%
+#   bc250-game 800 1600 mangohud %command%
+
+set -euo pipefail
+
+CONTROL_FILE="/tmp/bc250-max-performance"
+
+cleanup() {
+    rm -f "$CONTROL_FILE"
+}
+
+trap cleanup EXIT INT TERM
+
+if [[ $# -eq 0 ]]; then
+    cat << 'EOF'
+Usage:
+  bc250-game [FREQ | MIN MAX] <command> [args...]
+
+Examples:
+  bc250-game %command%              # Full max performance
+  bc250-game 1600 %command%         # Lock to 1600 MHz
+  bc250-game 800 1600 %command%     # Dynamic range 800-1600 MHz
+EOF
+    exit 1
+fi
+
+if [[ $# -ge 3 && "$1" =~ ^[0-9]+$ && "$2" =~ ^[0-9]+$ ]]; then
+    echo "$1 $2" > "$CONTROL_FILE"
+    shift 2
+elif [[ $# -ge 2 && "$1" =~ ^[0-9]+$ ]]; then
+    echo "$1" > "$CONTROL_FILE"
+    shift 1
+else
+    touch "$CONTROL_FILE"
+fi
+
+"$@"
+STATUS=$?
+cleanup
+exit $STATUS
