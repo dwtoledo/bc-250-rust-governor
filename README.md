@@ -6,10 +6,11 @@ A high-performance GPU frequency and thermal management daemon for AMD GPUs, wri
 
 - **Dynamic Frequency Scaling**: Adjusts GPU frequency based on workload with configurable ramp rates
 - **Burst Detection**: Rapidly increases frequency when sustained high load is detected
-- **Thermal Management**: Monitors GPU and CPU temperatures with emergency shutdown protection
+- **Flexible Gaming Mode**: Lock to maximum frequency, fixed target clock (e.g. 1600 MHz), or constrained dynamic range via the lightweight `bc250-game` wrapper
+- **Hardware Boundary Clamping**: Automatically checks and clamps safe points against driver OD limits (`sclk` and `vddc_range`) on startup
+- **Thermal Management & Hotspot Priority**: Monitors junction/hotspot temperature with edge fallback and emergency shutdown protection
 - **Fan Curve Control**: Automated fan speed control based on temperature curves
-- **Safe Voltage Tables**: Ensures stable operation with user-defined frequency/voltage pairs
-- **Voltage Interpolation**: Automatically interpolates voltage between safe-points for precise control
+- **Safe Voltage Tables & Interpolation**: Ensures stable operation with user-defined frequency/voltage pairs and automatic linear voltage interpolation
 - **MangoHUD GPU Usage Fix**: Patches the `gpu_metrics` sysfs file via bind mount so MangoHUD shows correct GPU usage instead of 655%
 - **Low Latency**: Optimized for minimal overhead and fast frequency transitions
 
