@@ -235,7 +235,7 @@ pub struct GpuTempReading {
 impl GpuTempSource {
     pub fn open(device_sysfs: &Path) -> Self {
         let Some(hwmon) = find_gpu_hwmon(device_sysfs) else {
-            eprintln!("GPU hwmon not found under {}", device_sysfs.display());
+            eprintln!("⚠️  GPU hwmon not found under {}", device_sysfs.display());
             return Self {
                 edge_path: None,
                 decision_path: None,
@@ -250,7 +250,7 @@ impl GpuTempSource {
 
         if hotspot_ok {
             eprintln!(
-                "GPU temperature: hotspot {}{}",
+                "🌡️  GPU temperature: hotspot {} (primary){}",
                 hotspot.display(),
                 if edge_ok {
                     format!(", edge {}", edge.display())
@@ -260,12 +260,12 @@ impl GpuTempSource {
             );
         } else if edge_ok {
             eprintln!(
-                "GPU hotspot temp2_input not found under {}. Using edge {} for fan and emergency.",
+                "🌡️  GPU hotspot temp2_input not found under {}. Using edge {} as primary.",
                 hwmon.display(),
                 edge.display()
             );
         } else {
-            eprintln!("GPU temperature files not found under {}", hwmon.display());
+            eprintln!("⚠️  GPU temperature files not found under {}", hwmon.display());
         }
 
         Self {

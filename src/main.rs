@@ -6,7 +6,7 @@ use std::{
     os::{fd::AsRawFd, unix::fs::OpenOptionsExt},
     path::Path,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
         mpsc, Arc, OnceLock,
     },
     thread::JoinHandle,
@@ -710,6 +710,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(min_freq);
 
     println!(
+        "🎮 GPU: PCI bus {} ({})",
+        config.gpu.pci_bus,
+        gpu_sysfs.display()
+    );
+    println!(
+        "⚡ Safe-points: {} points loaded ({}MHz @ {}mV -> {}MHz @ {}mV)",
+        safe_points.len(),
+        min_freq,
+        safe_points[&min_freq],
+        max_freq,
+        safe_points[&max_freq]
+    );
+    println!(
         "🚀 Initial frequency: {}MHz (min: {}MHz, max: {}MHz)",
         current_freq, min_freq, max_freq
     );
@@ -725,28 +738,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Shared shutdown flag for graceful termination
     let shutdown_flag = Arc::new(AtomicBool::new(false));
     let builtin_committed = Arc::new(AtomicBool::new(false));
+    let peak_temp_bits = Arc::new(AtomicU32::new(0.0f32.to_bits()));
 
     // Register Ctrl+C handler for graceful shutdown
     let shutdown_flag_signal = Arc::clone(&shutdown_flag);
     ctrlc::set_handler(move || {
-        eprintln!("\n🛑 Ctrl+C detectado! Iniciando desligamento seguro...");
+        eprintln!("\n🛑 SIGINT / Ctrl+C detected! Initiating graceful shutdown...");
         shutdown_flag_signal.store(true, Ordering::SeqCst);
     })
-    .expect("Erro ao definir handler de Ctrl+C");
+    .expect("Failed to register Ctrl+C handler");
 
     let thermal_manager = ThermalManager::new().ok();
     let thermal_manager_clone = thermal_manager.clone();
 
     let thermal_config = config.thermal;
     let shutdown_flag_thermal = Arc::clone(&shutdown_flag);
+    let peak_temp_bits_thermal = Arc::clone(&peak_temp_bits);
     let thermal_jh = std::thread::spawn(move || {
         let tm = thermal_manager;
         let mut last_thermal_check = Instant::now();
         let mut temp_failures = 0u32;
         let mut read_immediately = true;
+        let mut last_logged_temp: Option<f32> = None;
+        let mut last_logged_pwm: Option<Option<u8>> = None;
+        let mut last_logged_instant = Instant::now();
+
         loop {
             if shutdown_flag_thermal.load(Ordering::SeqCst) {
-                eprintln!("🛑 Thermal thread received shutdown signal");
                 break;
             }
 
@@ -754,7 +772,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 || last_thermal_check.elapsed()
                     >= Duration::from_millis(thermal_config.monitor_interval)
             {
-                read_immediately = false;
                 let pwm_raw = tm
                     .as_ref()
                     .and_then(|tm| tm.get_primary_fan_info(thermal_config.fan_control_index));
@@ -762,6 +779,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 match gpu_temp.read() {
                     Ok(reading) => {
                         temp_failures = 0;
+
+                        // Track peak temperature observed across daemon lifetime
+                        let mut current_peak =
+                            f32::from_bits(peak_temp_bits_thermal.load(Ordering::Relaxed));
+                        while reading.decision_c > current_peak {
+                            match peak_temp_bits_thermal.compare_exchange_weak(
+                                current_peak.to_bits(),
+                                reading.decision_c.to_bits(),
+                                Ordering::Relaxed,
+                                Ordering::Relaxed,
+                            ) {
+                                Ok(_) => break,
+                                Err(actual) => current_peak = f32::from_bits(actual),
+                            }
+                        }
+
                         let edge = reading
                             .edge_c
                             .map(|c| format!("{c:.1}°C"))
@@ -770,26 +803,48 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .hotspot_c
                             .map(|c| format!("{c:.1}°C"))
                             .unwrap_or_else(|| "N/A".to_string());
-                        let (pwm_str, pwm_pct_str) = match pwm_raw {
+
+                        let is_emergency = reading.decision_c > thermal_config.emergency_temp;
+                        let is_warning = reading.decision_c > thermal_config.max_safe_temp;
+                        let temp_jumped = last_logged_temp
+                            .map_or(true, |t| (reading.decision_c - t).abs() >= 2.0);
+                        let pwm_changed = last_logged_pwm != Some(pwm_raw);
+                        let heartbeat =
+                            last_logged_instant.elapsed() >= Duration::from_secs(10);
+
+                        if read_immediately
+                            || is_emergency
+                            || is_warning
+                            || temp_jumped
+                            || pwm_changed
+                            || heartbeat
+                        {
+                            let (pwm_str, pwm_pct_str) = match pwm_raw {
                                 Some(raw) => {
                                     let pct = ((raw as f32) * 100.0 / 255.0).round() as u8;
                                     (raw.to_string(), format!("{pct}%"))
                                 }
                                 None => ("N/A".to_string(), "N/A".to_string()),
                             };
-                        println!(
-                            "🌡️  GPU edge:{edge} hotspot:{hotspot} decision:{:.1}°C - PWM:{pwm_str} ({pwm_pct_str})",
-                            reading.decision_c
-                        );
+                            println!(
+                                "🌡️  GPU edge:{edge} hotspot:{hotspot} decision:{:.1}°C - PWM:{pwm_str} ({pwm_pct_str})",
+                                reading.decision_c
+                            );
+                            last_logged_temp = Some(reading.decision_c);
+                            last_logged_pwm = Some(pwm_raw);
+                            last_logged_instant = Instant::now();
+                        }
 
-                        if reading.decision_c > thermal_config.emergency_temp {
+                        read_immediately = false;
+
+                        if is_emergency {
                             eprintln!(
                                 "🚨 EMERGENCY: GPU {:.1}°C > {:.1}°C. Shutting down!",
                                 reading.decision_c, thermal_config.emergency_temp
                             );
                             shutdown_flag_thermal.store(true, Ordering::SeqCst);
                             break;
-                        } else if reading.decision_c > thermal_config.max_safe_temp {
+                        } else if is_warning {
                             eprintln!(
                                 "🔥 THERMAL WARNING: GPU {:.1}°C > {:.1}°C",
                                 reading.decision_c, thermal_config.max_safe_temp
@@ -856,6 +911,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let gov_send_clone = gov_send.clone();
     let shutdown_flag_gov = Arc::clone(&shutdown_flag);
     let builtin_committed_gov = Arc::clone(&builtin_committed);
+    let peak_temp_bits_gov = Arc::clone(&peak_temp_bits);
     let emergency_for_log = emergency_point.clone();
 
     let jh_gov: JoinHandle<()> = std::thread::spawn(move || {
@@ -895,7 +951,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         'governor: loop {
             // Check for shutdown signal
             if shutdown_flag_gov.load(Ordering::SeqCst) {
-                eprintln!("🛑 Governor thread received shutdown signal");
                 break;
             }
 
@@ -1113,10 +1168,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let committed = commit_builtin_safe_point(&gov_send, &ack_recv, emergency_point);
         builtin_committed_gov.store(committed, Ordering::SeqCst);
         let _ = gov_send.send(GovCommand::Shutdown);
-        eprintln!("🛑 Governor thread exiting");
-        eprintln!("📊 Stats: Applies={} Failed={} Bursts={} AvgLatency={}μs MaxLatency={}μs Success={:.1}%",
-                 stats.total_applies, stats.failed_applies, stats.burst_activations,
-                 stats.avg_latency_us(), stats.max_latency_us, stats.success_rate());
+        let peak_temp = f32::from_bits(peak_temp_bits_gov.load(Ordering::Relaxed));
+        eprintln!(
+            "📊 Stats: Applies={} Failed={} Bursts={} PeakTemp={:.1}°C AvgLatency={}μs MaxLatency={}μs Success={:.1}%",
+            stats.total_applies,
+            stats.failed_applies,
+            stats.burst_activations,
+            peak_temp,
+            stats.avg_latency_us(),
+            stats.max_latency_us,
+            stats.success_rate()
+        );
     });
 
     let jh_set: JoinHandle<()> = std::thread::spawn(move || {
@@ -1188,31 +1250,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                 }
-                Ok(GovCommand::Shutdown) => {
-                    eprintln!("🛑 Setter thread received shutdown signal");
-                    break;
-                }
-                Err(_) => {
-                    eprintln!("🛑 Setter thread: channel closed");
+                Ok(GovCommand::Shutdown) | Err(_) => {
                     break;
                 }
             }
         }
-
-        eprintln!("🛑 Setter thread exiting");
     });
 
     // Wait for shutdown signal (blocking poll with timeout for graceful shutdown)
     loop {
         if shutdown_flag.load(Ordering::SeqCst) {
-            eprintln!("🛑 Shutdown initiated...");
             break;
         }
         std::thread::sleep(Duration::from_millis(100));
     }
 
     // The governor confirms the builtin safe-point before stopping the setter.
-    eprintln!("🛑 Stopping governor and setter threads...");
+    eprintln!("🛑 Shutting down governor threads...");
 
     let start = Instant::now();
     let mut governor_finished = false;
@@ -1267,7 +1321,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    eprintln!("🛑 Shutdown complete.");
+    eprintln!("✅ Shutdown complete.");
     Ok(())
 }
 
