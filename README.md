@@ -157,21 +157,21 @@ The service should be running without "Invalid argument" errors. If you see volt
 
 #### 7. Install Gaming Mode Script (Optional)
 
-For automatic maximum performance when gaming:
+For automatic performance mode control when gaming:
 
 ```bash
 # Copy the script to system path
-sudo cp bc250-gaming-mode.sh /usr/local/bin/
+sudo cp scripts/bc250-game /usr/local/bin/
 
 # Make it executable
-sudo chmod +x /usr/local/bin/bc250-gaming-mode.sh
+sudo chmod +x /usr/local/bin/bc250-game
 
 # Test the script
-/usr/local/bin/bc250-gaming-mode.sh echo "test"
+/usr/local/bin/bc250-game echo "test"
 # Should create /tmp/bc250-max-performance and remove it after test
 ```
 
-See the [Gaming Mode](#gaming-mode-max-performance) section for Steam configuration.
+See the [Gaming Mode](#gaming-mode-performance-control) section for Steam configuration.
 
 ## Configuration
 
@@ -367,18 +367,18 @@ journalctl -u bc-250-rust-governor -f
 sudo systemctl stop bc-250-rust-governor
 ```
 
-### Gaming Mode (Max Performance)
+### Gaming Mode (Performance Control)
 
-For maximum performance in games, use the included wrapper script that locks the GPU to maximum frequency while playing:
+For optimal performance in games, use the included wrapper script that manages GPU frequencies while playing:
 
 #### 1. Install the Gaming Mode Script
 
 ```bash
 # Copy the script to a system location
-sudo cp bc250-gaming-mode.sh /usr/local/bin/
+sudo cp scripts/bc250-game /usr/local/bin/
 
 # Make it executable
-sudo chmod +x /usr/local/bin/bc250-gaming-mode.sh
+sudo chmod +x /usr/local/bin/bc250-game
 ```
 
 #### 2. Configure Steam Launch Options
@@ -387,23 +387,33 @@ For any game in your Steam library:
 
 1. Right-click the game → **Properties**
 2. Go to **General** → **Launch Options**
-3. Add: `bc250-gaming-mode.sh %command%`
+3. Add: `bc250-game %command%`
 
-Example with other tools (like MangoHUD):
+Example: Lock to Maximum Safe Frequency
 ```
-MANGOHUD=1 bc250-gaming-mode.sh %command%
+bc250-game %command%
 ```
 
-Example with game launch arguments:
+Example: Fixed Clock at 1600 MHz (quieter, cooler operation)
 ```
-bc250-gaming-mode.sh %command% -novid -console
+bc250-game 1600 %command%
+```
+
+Example: Restricted Dynamic Range between 800 MHz and 1600 MHz with MangoHUD
+```
+MANGOHUD=1 bc250-game 800 1600 %command%
+```
+
+Example with extra game launch arguments:
+```
+bc250-game %command% -novid -console
 ```
 
 #### 3. How It Works
 
-- When the game starts, the script creates `/tmp/bc250-max-performance`
-- The governor detects this file and locks GPU to maximum frequency
-- You get consistent maximum performance throughout the gaming session
+- When the game starts, the script writes the desired mode/range to `/tmp/bc250-max-performance` (or creates it empty for full max)
+- The governor detects this file and applies the requested frequency profile
+- You get consistent performance throughout the gaming session
 - When you exit the game, the file is removed automatically
 - The governor returns to normal dynamic frequency scaling
 
