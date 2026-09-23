@@ -7,11 +7,11 @@ safe-points = [
 ]
 
 [timing]
-burst-samples = 20
-ramp-up-samples = 64
-ramp-down-samples = 256
-intervals = { sample = 2000, adjust = 8000, finetune = 50000 }
-ramp-rates = { burst = 1000, up = 50, up-medium = 25, up-slow = 10, up-crawl = 2, down = 0.2 }
+burst-samples = 11
+ramp-up-samples = 55
+ramp-down-samples = 280
+intervals = { sample = 1750, adjust = 9000, finetune = 45000 }
+ramp-rates = { burst = 1000, up = 55, up-medium = 25, up-slow = 10, up-crawl = 2, down = 0.3 }
 
 [frequency-thresholds]
 adjust = 100
@@ -19,10 +19,10 @@ finetune = 25
 
 [load-target]
 upper = 0.90
-medium = 0.80
+medium = 0.82
 slow = 0.70
-crawl = 0.60
-lower = 0.40
+crawl = 0.62
+lower = 0.38
 
 [performance-mode]
 enabled = true

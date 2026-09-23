@@ -1447,12 +1447,12 @@ mod tests {
         assert_eq!(missing_sections.load_target, builtin.load_target);
         assert_eq!(missing_sections.performance_mode, builtin.performance_mode);
         assert_eq!(missing_sections.gpu, builtin.gpu);
-        assert_eq!(missing_sections.timing.burst_samples, 20);
+        assert_eq!(missing_sections.timing.burst_samples, 11);
         assert_eq!(missing_sections.timing.ramp_rates.burst, 1000.0);
-        assert_eq!(missing_sections.timing.ramp_rates.down, 0.2);
+        assert_eq!(missing_sections.timing.ramp_rates.down, 0.3);
         assert_eq!(missing_sections.frequency_thresholds.finetune, 25);
-        assert_eq!(missing_sections.load_target.medium, 0.80);
-        assert_eq!(missing_sections.load_target.lower, 0.40);
+        assert_eq!(missing_sections.load_target.medium, 0.82);
+        assert_eq!(missing_sections.load_target.lower, 0.38);
 
         let missing_key: Config = toml::from_str(
             "safe-points = [{ frequency = 1500, voltage = 775 }]\n[timing]\nburst-samples = 4\n",

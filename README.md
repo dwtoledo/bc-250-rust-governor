@@ -199,17 +199,17 @@ safe-points = [
 
 ```toml
 [timing]
-burst-samples = 20              # Samples needed to trigger burst mode
-ramp-up-samples = 64            # Samples for calculating upward load
-ramp-down-samples = 256         # Samples for calculating downward load
-intervals = { sample = 2000, adjust = 8000, finetune = 50000 }
-ramp-rates = { burst = 1000, up = 50, up-medium = 25, up-slow = 10, up-crawl = 2, down = 0.2 }
+burst-samples = 11              # Samples needed to trigger burst mode (~19ms reaction)
+ramp-up-samples = 55            # Samples for calculating upward load
+ramp-down-samples = 280         # Samples for calculating downward load
+intervals = { sample = 1750, adjust = 9000, finetune = 45000 }
+ramp-rates = { burst = 1000, up = 55, up-medium = 25, up-slow = 10, up-crawl = 2, down = 0.3 }
 ```
 
 **Intervals** (in microseconds):
-- `sample`: How often to check GPU activity (2ms default)
-- `adjust`: Minimum time between large frequency changes (8ms)
-- `finetune`: Minimum time between small frequency adjustments (50ms)
+- `sample`: How often to check GPU activity (1.75ms default)
+- `adjust`: Minimum time between large frequency changes (9ms)
+- `finetune`: Minimum time between small frequency adjustments (45ms)
 
 **Ramp Rates** (MHz per millisecond):
 - `burst`: Frequency increase rate during burst mode
@@ -232,10 +232,10 @@ finetune = 25     # MHz difference needed for finetune interval changes
 ```toml
 [load-target]
 upper = 0.90      # Threshold for maximum ramp-up rate (90% busy)
-medium = 0.80     # Threshold for medium ramp-up rate
+medium = 0.82     # Threshold for medium ramp-up rate
 slow = 0.70       # Threshold for slow ramp-up rate
-crawl = 0.60      # Threshold for crawl ramp-up rate
-lower = 0.40      # Below this, frequency ramps down
+crawl = 0.62      # Threshold for crawl ramp-up rate
+lower = 0.38      # Below this, frequency ramps down
 ```
 
 These values represent the percentage of samples where the GPU was active.
@@ -448,6 +448,56 @@ check_interval = 500
 3. **Smoothness**: Increase `ramp-down-samples` for smoother frequency transitions
 4. **Responsiveness**: Decrease `sample` interval and increase `ramp-rates.up` for faster response
 5. **Fan Curves**: Adjust temperature thresholds based on your cooling solution
+
+### Ready-to-Use Profiles
+
+Depending on your preference for maximum frame rates or quieter, cooler operation, choose one of the following simulated profiles:
+
+#### Profile 1: High Performance (Default in `default-config.toml`)
+Best for gaming PCs, esports, and maximum responsiveness. Triggers burst mode in ~19ms, maintains tight frequency tracking, and maximizes FPS:
+
+```toml
+[timing]
+burst-samples = 11
+ramp-up-samples = 55
+ramp-down-samples = 280
+intervals = { sample = 1750, adjust = 9000, finetune = 45000 }
+ramp-rates = { burst = 1000, up = 55, up-medium = 25, up-slow = 10, up-crawl = 2, down = 0.3 }
+
+[frequency-thresholds]
+adjust = 100
+finetune = 25
+
+[load-target]
+upper = 0.90
+medium = 0.82
+slow = 0.70
+crawl = 0.62
+lower = 0.38
+```
+
+#### Profile 2: Conservative / Cool & Quiet (Everyday & Low Noise)
+Best for compact ITX builds, quiet home environments, or mixed desktop/multimedia usage. Requires sustained load (~62ms) to trigger burst, ramps down faster when idle to keep temperatures and fan noise low:
+
+```toml
+[timing]
+burst-samples = 25
+ramp-up-samples = 80
+ramp-down-samples = 320
+intervals = { sample = 2500, adjust = 10000, finetune = 50000 }
+ramp-rates = { burst = 800, up = 40, up-medium = 20, up-slow = 8, up-crawl = 2, down = 0.8 }
+
+[frequency-thresholds]
+adjust = 120
+finetune = 30
+
+[load-target]
+upper = 0.92
+medium = 0.85
+slow = 0.72
+crawl = 0.60
+lower = 0.45
+```
 
 ### Governor Simulator & Optimization Tool (`tools/simulate.py`)
 
