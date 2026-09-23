@@ -449,6 +449,24 @@ check_interval = 500
 4. **Responsiveness**: Decrease `sample` interval and increase `ramp-rates.up` for faster response
 5. **Fan Curves**: Adjust temperature thresholds based on your cooling solution
 
+### Governor Simulator & Optimization Tool (`tools/simulate.py`)
+
+A standalone Python 3 simulation tool is provided in `tools/simulate.py` to evaluate and optimize governor configurations without needing real GPU hardware. It runs on any machine (Linux or macOS) using only Python's standard library.
+
+```bash
+# Benchmark current default configuration against synthetic workloads
+python3 tools/simulate.py --benchmark
+
+# Run automated parameter search / optimization
+python3 tools/simulate.py --tune --iterations 100
+```
+
+The simulator:
+- Replicates `src/governor_core.rs` algorithm 1:1 (sampling, burst detection, ramp steps, adjust thresholds).
+- Tests 4 workload scenarios: **Desktop Idle** (with UI spikes), **Heavy Sustained Gaming** (Cyberpunk-style), **Dynamic Esports** (CS2-style oscillating load), and **Scene Transitions** (Menu -> Fight -> Inventory).
+- Evaluates responsiveness, frame stability (anti-hunting / jitter), energy efficiency, and driver write overhead.
+- Generates ready-to-use TOML configuration blocks based on optimization results.
+
 ## Troubleshooting
 
 ### Governor Not Changing Frequency
